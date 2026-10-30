@@ -119,10 +119,14 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
     return .normal;
 }
 
-pub fn handleUserCommand(_: *Self, mail: Control.UserMail) HandleStatus {
+pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
     switch (mail.command) {
         .shutdown => {
-            return .exit;
+            if (self.procs.count() > 0) { // 如果还有进程在运行，标记为等待中，所有进程回收后会自动退出
+                self.waiting = true;
+            } else {
+                return .exit;
+            }
         },
         else => {},
     }
@@ -164,7 +168,6 @@ pub fn shutdown(self: *Self) void {
     if (self.exited) return;
     var iter = self.procs.valueIterator();
     while (iter.next()) |m| {
-        // todo: 改成预构造的一次性批量消息
         m.proc.receiver.putOne(self.io, .stop) catch |err| {
             switch (err) {
                 error.Canceled => {},

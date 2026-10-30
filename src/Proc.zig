@@ -14,10 +14,11 @@ pub const Ref = struct {
     pub var counter: Value = .init(0);
 
     pk: u32,
-    pid: ?i32 = null,
+    pid: ?Child.Id = null,
 
     pub fn new() Ref {
-        return .{ .pk = counter.fetchAdd(1, .monotonic) };
+        const pk = counter.fetchAdd(1, .monotonic);
+        return .{ .pk = pk };
     }
 
     pub fn format(self: *const Ref, writer: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -43,11 +44,11 @@ receiver: Control.Message.Queue = .init(&.{}),
 pub fn init(io: Io, control: Control, argv: Argv) Error!Self {
     const ref = Ref.new();
     const child = try std.process.spawn(io, .{
-        // todo: 从外部传入参数
         .argv = argv,
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .pipe,
+        .pgid = 0,
     });
 
     return .{
@@ -84,7 +85,9 @@ pub fn connect(
     receiver: *Control.Message.Queue,
     reporter: *Reporter,
 ) void {
+    var pgid: ?std.posix.pid_t = null;
     if (builtin.os.tag != .windows) if (child.id) |pid| {
+        pgid = -pid;
         reporter.report(io, .{ .proc_started = pid });
     };
     var group: Io.Group = .init;
@@ -104,6 +107,11 @@ pub fn connect(
                 std.log.debug("Received stop message for {f}", .{reporter.proc_ref});
                 group.cancel(io);
                 child.kill(io);
+                if (pgid) |id| { // 发送 SIGTERM 给进程组
+                    std.log.debug("Sending SIGTERM to pgid {d}", .{id});
+                    std.posix.kill(id, .TERM) // 负数表示 pgid
+                    catch std.log.warn("Failed to send SIGTERM to pgid {d}", .{id});
+                }
                 reporter.report(io, .proc_dead); // 发送死亡通知
                 break;
             },
