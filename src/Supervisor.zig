@@ -89,7 +89,7 @@ pub fn listen(self: *Self) void {
             .normal => {},
         }
     }
-    std.log.debug("Supervisor exiting", .{});
+    std.log.debug("Supervisor exited", .{});
 }
 
 pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
@@ -120,7 +120,7 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
             }
             std.debug.assert(self.procs.get(mail.ref.pk) == null);
             if (self.waiting and self.procs.count() == 0) {
-                std.log.info("All procs exited, supervisor exiting", .{});
+                std.log.debug("All procs exited, supervisor exiting", .{});
                 return .exit;
             }
         },
@@ -159,8 +159,7 @@ pub fn launch(self: *Self, argv: Proc.Argv, options: LaunchOptions) Error!Proc.R
 
 pub fn stopProc(self: *Self, ref: Proc.Ref) Error!void {
     if (self.procs.getPtr(ref.pk)) |managed| {
-        std.log.info("Stopping: {f}", .{ref});
-        try managed.send(self.io, .stop);
+        try managed.stop(self.io);
         return;
     }
 
@@ -190,7 +189,6 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) Error!void
 pub fn restartProc(self: *Self, ref: Proc.Ref) Error!Proc.Ref {
     if (self.procs.get(ref.pk)) |managed| {
         try self.stopProcSync(ref, .fromSeconds(3));
-        std.log.info("Restarting process: {f}", .{ref});
         const argv = managed.proc.argv;
         const options = managed.launch_options;
         return self.launch(argv, options);
@@ -206,9 +204,8 @@ pub fn waitAll(self: *Self) Error!void {
         f.await(self.io);
         self.listened = null; // 避免 shutdown 发消息
         self.exited = true;
-        std.log.info("All procs exited, supervisor run complete", .{});
     } else {
-        std.log.info("Supervisor not running", .{});
+        std.log.warn("Supervisor not running", .{});
     }
 }
 
