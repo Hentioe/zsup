@@ -16,6 +16,11 @@ pub fn main(init: std.process.Init) !void {
         .stdout_redirected = false, // 同上
     });
     std.log.info("Waiting for crash: {f}", .{crash});
+    const spawn = try sup.launch(&.{"zig-out/bin/spawn"}, .{});
+    try init.io.sleep(.fromSeconds(1), .awake);
+    try sup.stopProc(spawn);
+    std.log.info("All spawn ping processes stopped", .{});
+    try init.io.sleep(.fromSeconds(1), .awake);
     try sup.waitAll();
     std.log.info("Goodbye", .{});
 }

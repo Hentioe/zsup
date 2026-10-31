@@ -121,7 +121,7 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
 
 pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
     switch (mail.command) {
-        .shutdown => {
+        .wait_all => {
             if (self.procs.count() > 0) { // 如果还有进程在运行，标记为等待中，所有进程回收后会自动退出
                 self.waiting = true;
             } else {
@@ -158,16 +158,21 @@ pub fn stopProc(self: *Self, ref: Proc.Ref) Error!void {
 
 pub fn waitAll(self: *Self) Error!void {
     if (self.listened) |*f| {
-        self.waiting = true;
+        std.log.debug("Sending wait all command to supervisor", .{});
+        self.mailbox.putOne(self.io, .{ .user = .{ .command = .wait_all } }) catch unreachable;
         f.await(self.io);
         self.listened = null; // 避免 shutdown 发消息
+        self.exited = true;
+        std.log.info("All procs exited, supervisor run complete", .{});
+    } else {
+        std.log.info("Supervisor not running", .{});
     }
 }
 
 pub fn shutdown(self: *Self) void {
     if (self.exited) return;
     var iter = self.procs.valueIterator();
-    while (iter.next()) |m| {
+    while (iter.next()) |m| { // 向所有进程发送停止命令
         m.proc.receiver.putOne(self.io, .stop) catch |err| {
             switch (err) {
                 error.Canceled => {},
@@ -175,12 +180,5 @@ pub fn shutdown(self: *Self) void {
             }
         };
     }
-    if (self.listened) |*f| {
-        std.log.info("Sending shutdown command to supervisor", .{});
-        self.mailbox.putOne(self.io, .{ .user = .{ .command = .shutdown } }) catch unreachable;
-        f.await(self.io); // todo: 处理取消的返回值
-        self.listened = null; // 避免 wait 发消息
-    }
-    self.exited = true;
-    std.log.info("Supervisor shutdown complete", .{});
+    self.waitAll() catch |err| std.log.err("Error waiting for all procs: {s}", .{@errorName(err)});
 }

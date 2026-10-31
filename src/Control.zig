@@ -20,7 +20,7 @@ pub const Message = union(enum) {
 
 pub const Command = enum {
     stop_proc,
-    shutdown,
+    wait_all,
 };
 
 pub const ProcMail = struct {

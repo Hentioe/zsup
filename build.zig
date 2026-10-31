@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
     const examples = [_][]const u8{
         "basic",
         "crash",
+        "spawn",
         "ctrl_c_shutdown",
     };
     for (examples) |name| {
