@@ -5,20 +5,27 @@ pub fn main(init: std.process.Init) !void {
     var sup = zsup.init(init.io, init.gpa);
     defer sup.deinit();
     sup.start();
+
+    // 启动一个 ping 程序，3 秒后停止
     const ping = try sup.launch(&.{ "ping", "-t", "99", "0.0.0.0" }, .{});
-    // 等待 3 秒
     try init.io.sleep(.fromSeconds(3), .awake);
-    // 停止 ping 进程
     try sup.stopProc(ping);
     std.log.info("Stopped ping: {f}", .{ping});
+
+    // 启动一个会崩溃的程序
     const crash = try sup.launch(&.{"zig-out/bin/crash"}, .{
         .stderr_redirected = false, // 避免崩溃消息引起误解
         .stdout_redirected = false, // 同上
     });
-    std.log.info("Waiting for crash: {f}", .{crash});
+
+    std.log.info("Restarting crash: {f}", .{crash});
+    // 重启 crash
+    _ = try sup.restartProc(crash);
+
+    // 启动一个会生成子进程的程序
     const spawn = try sup.launch(&.{"zig-out/bin/spawn"}, .{});
     try init.io.sleep(.fromSeconds(1), .awake);
-    try sup.stopProc(spawn);
+    try sup.stopProcSync(spawn, .fromSeconds(3));
     std.log.info("All spawn ping processes stopped", .{});
     try init.io.sleep(.fromSeconds(1), .awake);
     try sup.waitAll();

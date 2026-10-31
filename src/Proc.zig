@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
+const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 const Control = @import("Control.zig");
 const Future = std.Io.Future;
@@ -32,16 +33,18 @@ pub const Ref = struct {
 pub const Argv = []const []const u8;
 
 io: Io,
+allocator: Allocator,
 ref: Ref,
 argv: Argv,
 child: Child,
+stopping: std.atomic.Value(bool),
 control: Control,
 linked: ?Future(void) = null,
 monitor: ?Monitor = null,
 reporter: ?Reporter = null,
 receiver: Control.Message.Queue = .init(&.{}),
 
-pub fn init(io: Io, control: Control, argv: Argv) Error!Self {
+pub fn init(io: Io, allocator: Allocator, control: Control, argv: Argv) Error!Self {
     const ref = Ref.new();
     const child = try std.process.spawn(io, .{
         .argv = argv,
@@ -56,6 +59,8 @@ pub fn init(io: Io, control: Control, argv: Argv) Error!Self {
         .child = child,
         .argv = argv,
         .io = io,
+        .stopping = .init(false),
+        .allocator = allocator,
         .control = control,
     };
 }
@@ -75,17 +80,19 @@ pub fn link(self: *Self) void {
     }
     self.reporter = .{ .proc_ref = self.ref, .control = &self.control };
     self.monitor = .{ .proc_ref = self.ref, .control = &self.control };
-    self.linked = io.async(connect, .{ io, &self.child, &self.monitor.?, &self.receiver, &self.reporter.? });
+    self.linked = io.async(connect, .{self});
 }
 
-pub fn connect(
-    io: Io,
-    child: *Child,
-    monitor: *Monitor,
-    receiver: *Control.Message.Queue,
-    reporter: *Reporter,
-) void {
-    var pgid: ?std.posix.pid_t = null;
+const Pgid = std.posix.pid_t;
+
+pub fn connect(self: *Self) void {
+    const io = self.io;
+    const child = &self.child;
+    const reporter = &self.reporter.?;
+    const monitor = &self.monitor.?;
+    const receiver = &self.receiver;
+
+    var pgid: ?Pgid = null;
     if (builtin.os.tag != .windows) if (child.id) |pid| {
         pgid = -pid;
         reporter.report(io, .{ .proc_started = pid });
@@ -103,19 +110,37 @@ pub fn connect(
             break;
         };
         switch (message) {
-            .stop => {
+            .stop => if (!self.stopping.load(.monotonic)) {
+                self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop message for {f}", .{reporter.proc_ref});
-                group.cancel(io);
-                child.kill(io);
-                if (pgid) |id| { // 发送 SIGTERM 给进程组
-                    std.log.debug("Sending SIGTERM to pgid {d}", .{id});
-                    std.posix.kill(id, .TERM) // 负数表示 pgid
-                    catch std.log.warn("Failed to send SIGTERM to pgid {d}", .{id});
+                stop(io, &group, child, pgid);
+                reporter.report(io, .proc_dead); // 发送死亡通知
+                break;
+            },
+            .stop_sync => |done| if (!self.stopping.load(.monotonic)) {
+                self.stopping.store(true, .monotonic);
+                std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
+                stop(io, &group, child, pgid);
+                if (done.timeout.load(.monotonic)) { // 发送侧已超时返回
+                    done.destroy(self.allocator);
+                } else {
+                    done.reply(io); // 通知调用方
                 }
                 reporter.report(io, .proc_dead); // 发送死亡通知
                 break;
             },
             else => {},
         }
+    }
+}
+
+fn stop(io: Io, group: *Io.Group, child: *Child, pgid: ?Pgid) void {
+    group.cancel(io);
+    child.kill(io);
+    // todo: 等待进程退出
+    if (pgid) |id| { // 发送 SIGTERM 给进程组
+        std.log.debug("Sending SIGTERM to pgid {d}", .{id});
+        std.posix.kill(id, .TERM) // 负数表示 pgid
+        catch std.log.warn("Failed to send SIGTERM to pgid {d}", .{id});
     }
 }

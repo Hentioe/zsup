@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
         "basic",
         "crash",
         "spawn",
+        "restart",
         "ctrl_c_shutdown",
     };
     for (examples) |name| {

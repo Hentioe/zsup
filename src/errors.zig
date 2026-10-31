@@ -11,4 +11,6 @@ pub const Error =
     SendError ||
     std.mem.Allocator.Error ||
     std.process.SpawnError ||
-    std.process.Child.WaitError;
+    std.process.Child.WaitError ||
+    std.Io.Event.WaitTimeoutError // Event.waitTimeout
+;

@@ -9,7 +9,6 @@ proc_ref: Proc.Ref,
 control: *Control,
 
 pub fn launch(self: *Self, io: Io, file: Io.File, st: StreamType) void {
-    std.log.debug("Launching reporter ({s})", .{@tagName(st)});
     var chunk: [4096]u8 = undefined;
     while (true) {
         const n = file.readStreaming(io, &.{&chunk}) catch |err| {

@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Proc = @import("Proc.zig");
+const Done = @import("Done.zig");
 const Control = @import("Control.zig");
 const Error = @import("errors.zig").Error;
 const Self = @This();
@@ -22,6 +23,15 @@ const Managed = struct {
         self.proc.deinit();
         allocator.destroy(self.proc);
         self.* = undefined;
+    }
+
+    pub fn stop(self: *Managed, io: Io) Error!void {
+        if (!self.proc.stopping.load(.monotonic)) return self.send(io, .stop) // 仅在进程未执行过时发送停止消息
+        else std.log.warn("Proc is already stopping: {f}", .{self.proc.ref});
+    }
+
+    pub fn send(self: *Managed, io: Io, message: Control.Message) Error!void {
+        return self.proc.receiver.putOne(io, message);
     }
 };
 
@@ -47,6 +57,7 @@ pub fn init(io: Io, gpa: Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
+    std.log.debug("Deinitializing supervisor", .{});
     if (!self.exited) self.shutdown();
     var iter = self.procs.valueIterator();
     while (iter.next()) |m| m.destroy(self.gpa);
@@ -136,7 +147,7 @@ pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
 
 pub fn launch(self: *Self, argv: Proc.Argv, options: LaunchOptions) Error!Proc.Ref {
     const control: Control = .{ .queue = &self.mailbox };
-    const proc = try Proc.init(self.io, control, argv);
+    const proc = try Proc.init(self.io, self.gpa, control, argv);
     var managed: Managed = try .create(self.gpa, proc);
     managed.launch_options = options;
     try self.procs.put(proc.ref.pk, managed);
@@ -147,10 +158,42 @@ pub fn launch(self: *Self, argv: Proc.Argv, options: LaunchOptions) Error!Proc.R
 }
 
 pub fn stopProc(self: *Self, ref: Proc.Ref) Error!void {
-    if (self.procs.getPtr(ref.pk)) |m| {
+    if (self.procs.getPtr(ref.pk)) |managed| {
         std.log.info("Stopping: {f}", .{ref});
-        try m.proc.receiver.putOne(self.io, .stop);
+        try managed.send(self.io, .stop);
         return;
+    }
+
+    return Error.ProcNotFound;
+}
+
+pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) Error!void {
+    if (timeout.toSeconds() < 1) std.log.warn("Timeout is too short: {d} seconds", .{timeout.toSeconds()});
+    if (self.procs.getPtr(ref.pk)) |managed| {
+        std.log.debug("Sync stopping: {f}", .{ref});
+        var done: *Done = try .create(self.gpa);
+        defer if (!done.timeout.load(.monotonic)) done.destroy(self.gpa); // 没有超时，释放 done
+        try managed.send(self.io, .{ .stop_sync = done });
+        // 等待进程停止或超时
+        done.event.waitTimeout(self.io, .{ .duration = .{ .clock = .awake, .raw = timeout } }) catch |err| {
+            std.log.warn("Timeout waiting for {f}", .{ref});
+            done.timeout.store(true, .monotonic); // 标记为超时，让回复侧自己释放
+            return err;
+        };
+
+        return;
+    }
+
+    return Error.ProcNotFound;
+}
+
+pub fn restartProc(self: *Self, ref: Proc.Ref) Error!Proc.Ref {
+    if (self.procs.get(ref.pk)) |managed| {
+        try self.stopProcSync(ref, .fromSeconds(3));
+        std.log.info("Restarting process: {f}", .{ref});
+        const argv = managed.proc.argv;
+        const options = managed.launch_options;
+        return self.launch(argv, options);
     }
 
     return Error.ProcNotFound;
@@ -172,13 +215,9 @@ pub fn waitAll(self: *Self) Error!void {
 pub fn shutdown(self: *Self) void {
     if (self.exited) return;
     var iter = self.procs.valueIterator();
-    while (iter.next()) |m| { // 向所有进程发送停止命令
-        m.proc.receiver.putOne(self.io, .stop) catch |err| {
-            switch (err) {
-                error.Canceled => {},
-                else => unreachable,
-            }
-        };
+    while (iter.next()) |managed| { // 向所有进程发送停止命令
+        std.log.debug("Stopping managed proc: {f}", .{managed.proc.ref});
+        managed.stop(self.io) catch continue;
     }
     self.waitAll() catch |err| std.log.err("Error waiting for all procs: {s}", .{@errorName(err)});
 }

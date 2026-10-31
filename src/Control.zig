@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Proc = @import("Proc.zig");
+const Done = @import("Done.zig");
 const Self = @This();
 
 pub const StdStream = struct {
@@ -11,7 +12,8 @@ pub const StdStream = struct {
 pub const Message = union(enum) {
     stdout: StdStream.Bytes,
     stderr: StdStream.Bytes,
-    stop, // 停止进程
+    stop, // 请求停止进程
+    stop_sync: *Done,
     proc_started: i32, // 进程已启动
     proc_dead, // 进程已死亡
 
