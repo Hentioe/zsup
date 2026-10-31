@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const Argv = @import("Argv.zig");
 const Proc = @import("Proc.zig");
 const Done = @import("Done.zig");
 const Control = @import("Control.zig");
@@ -145,9 +146,9 @@ pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
     return .normal;
 }
 
-pub fn launch(self: *Self, argv: Proc.Argv, options: LaunchOptions) Error!Proc.Ref {
+pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) Error!Proc.Ref {
     const control: Control = .{ .queue = &self.mailbox };
-    const proc = try Proc.init(self.io, self.gpa, control, argv);
+    const proc = try Proc.initOwned(self.io, self.gpa, control, argv);
     var managed: Managed = try .create(self.gpa, proc);
     managed.launch_options = options;
     try self.procs.put(proc.ref.pk, managed);
@@ -188,10 +189,10 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) Error!void
 
 pub fn restartProc(self: *Self, ref: Proc.Ref) Error!Proc.Ref {
     if (self.procs.get(ref.pk)) |managed| {
-        try self.stopProcSync(ref, .fromSeconds(3));
-        const argv = managed.proc.argv;
+        const argv = try Argv.cloneFrom(self.gpa, &managed.proc.argv);
         const options = managed.launch_options;
-        return self.launch(argv, options);
+        try self.stopProcSync(ref, .fromSeconds(3));
+        return self.launchOwned(argv, options);
     }
 
     return Error.ProcNotFound;

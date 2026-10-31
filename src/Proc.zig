@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
+const Argv = @import("Argv.zig");
 const Control = @import("Control.zig");
 const Future = std.Io.Future;
 const Monitor = @import("Monitor.zig");
@@ -30,7 +31,6 @@ pub const Ref = struct {
         }
     }
 };
-pub const Argv = []const []const u8;
 
 io: Io,
 allocator: Allocator,
@@ -44,10 +44,14 @@ monitor: ?Monitor = null,
 reporter: ?Reporter = null,
 receiver: Control.Message.Queue = .init(&.{}),
 
-pub fn init(io: Io, allocator: Allocator, control: Control, argv: Argv) Error!Self {
+pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Error!Self {
+    errdefer {
+        var tmp = argv; // 复制一份，用于释放（内部的数据指针不变）。
+        tmp.deinit();
+    }
     const ref = Ref.new();
     const child = try std.process.spawn(io, .{
-        .argv = argv,
+        .argv = argv.data.items,
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .pipe,
@@ -69,6 +73,7 @@ pub fn deinit(self: *Self) void {
     // todo: 输出取消后的结果
     std.log.debug("Deinitializing: {f}", .{self.ref});
     if (self.linked) |*f| f.cancel(self.io);
+    self.argv.deinit();
     self.* = undefined;
 }
 
