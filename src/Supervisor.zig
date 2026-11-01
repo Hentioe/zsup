@@ -45,7 +45,7 @@ io: Io,
 gpa: Allocator,
 procs: std.AutoHashMap(u32, Managed),
 mailbox: Control.Mail.Queue = .init(&.{}),
-listened: ?Io.Future(void) = null,
+listener: ?Io.Future(void) = null,
 waiting: bool = false,
 exited: bool = false,
 
@@ -66,9 +66,9 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-pub fn start(self: *Self) void {
-    if (self.listened != null) return;
-    self.listened = self.io.async(listen, .{self});
+pub fn start(self: *Self) Io.ConcurrentError!void {
+    if (self.listener != null) return;
+    self.listener = try self.io.concurrent(listen, .{self});
 }
 
 pub const HandleStatus = enum { normal, exit };
@@ -103,10 +103,9 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
                 Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stderr: {s}", .{@errorName(err)});
             };
         },
-        .proc_started => |pid| {
-            if (self.procs.getPtr(mail.ref.pk)) |m| {
-                m.proc.ref.pid = pid;
-                std.log.info("Started: {f}", .{m.proc.ref});
+        .proc_started => {
+            if (self.procs.getPtr(mail.ref.pk)) |managed| {
+                std.log.info("Started: {f}", .{managed.proc.ref});
             } else {
                 std.log.err("Started but not found in procs map: {f}", .{mail.ref});
             }
@@ -122,6 +121,9 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
                 std.log.debug("All procs exited, supervisor exiting", .{});
                 return .exit;
             }
+        },
+        .proc_lost => {
+            // todo: 实现丢失连接的进程的处理
         },
         else => {},
     }
@@ -150,8 +152,12 @@ pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) errors.Launc
     var managed: Managed = try .create(self.gpa, proc);
     managed.launch_options = options;
     try self.procs.put(proc.ref.pk, managed);
-
-    managed.proc.link();
+    managed.proc.link() catch {
+        // todo: 链接失败，可能需要上报 proc_lost 或采取其他处理措施。至少要满足：
+        // - 从 procs 移除
+        // - 终止任务、进程
+        // - 释放 Proc
+    };
 
     return proc.ref;
 }
@@ -200,11 +206,11 @@ pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
 }
 
 pub fn waitAll(self: *Self) errors.SendError!void {
-    if (self.listened) |*f| {
+    if (self.listener) |*f| {
         std.log.debug("Sending wait all command to supervisor", .{});
         try self.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = .wait_all } });
         f.await(self.io);
-        self.listened = null; // 避免 shutdown 发消息
+        self.listener = null; // 避免 shutdown 发消息
         self.exited = true;
     } else {
         std.log.warn("Supervisor not running", .{});

@@ -5,7 +5,7 @@ const Argv = zsup.Argv;
 pub fn main(init: std.process.Init) !void {
     var sup = zsup.init(init.io, init.gpa);
     defer sup.deinit();
-    sup.start();
+    try sup.start();
 
     // 启动一个 ping 程序，3 秒后停止
     var ping_argv = try Argv.init(init.gpa, "ping");

@@ -38,7 +38,7 @@ argv: Argv,
 child: Child,
 stopping: std.atomic.Value(bool),
 control: Control,
-linked: ?Future(void) = null,
+connector: ?Future(ConnectError!void) = null,
 monitor: ?Monitor = null,
 reporter: ?Reporter = null,
 receiver: Control.Message.Queue = .init(&.{}),
@@ -73,25 +73,30 @@ pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Ini
 pub fn deinit(self: *Self) void {
     // todo: 输出取消后的结果
     std.log.debug("Deinitializing: {f}", .{self.ref});
-    if (self.linked) |*f| f.cancel(self.io);
+    if (self.connector) |*f| f.cancel(self.io) catch |err| std.log.warn("Connect cancel failed: {}", .{err});
     self.argv.deinit(self.allocator);
     self.* = undefined;
 }
 
-pub fn link(self: *Self) void {
+pub fn link(self: *Self) Io.ConcurrentError!void {
     const io = self.io;
-    if (self.linked != null) {
+    if (self.connector != null) {
         std.log.warn("Already linked ({f})", .{self.ref});
         return;
     }
     self.reporter = .{ .proc_ref = self.ref, .control = &self.control };
     self.monitor = .{ .proc_ref = self.ref, .control = &self.control };
-    self.linked = io.async(connect, .{self});
+    self.connector = try io.concurrent(connect, .{self});
 }
 
 const Pgid = std.posix.pid_t;
+const ConnectError = std.Io.ConcurrentError;
 
-pub fn connect(self: *Self) void {
+pub fn connect(self: *Self) ConnectError!void {
+    // 正常情况，进入 receiver 消息处理后，不应该返回错误。
+    // 如果返回了错误，表示在前置阶段就失败了。进程可能进入“失控”状态。上报为 proc_lost（丢失连接）
+    errdefer self.control.send(self.io, self.ref, .proc_lost) catch |err| std.log.err("Failed to send lost message: {}", .{err});
+
     const io = self.io;
     const child = &self.child;
     const reporter = &self.reporter.?;
@@ -100,15 +105,17 @@ pub fn connect(self: *Self) void {
 
     var pgid: ?Pgid = null;
     if (builtin.os.tag != .windows) if (child.id) |pid| {
+        self.ref.pid = pid;
         pgid = -pid;
-        reporter.report(io, .{ .proc_started = pid }) catch |err| std.log.err("Failed to report proc_started: {}", .{err});
+        reporter.report(io, .proc_started) catch |err| std.log.err("Failed to report proc_started: {}", .{err});
     };
     var group: Io.Group = .init;
+    errdefer group.cancel(self.io);
     // 启动监视器
-    group.async(io, Monitor.launch, .{ monitor, io, child });
+    try group.concurrent(io, Monitor.launch, .{ monitor, io, child });
     // 启动上报器
-    if (child.stdout) |f| group.async(io, Reporter.launch, .{ reporter, io, f, .out });
-    if (child.stderr) |f| group.async(io, Reporter.launch, .{ reporter, io, f, .err });
+    if (child.stdout) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, f, .out });
+    if (child.stderr) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, f, .err });
 
     while (true) {
         const message = receiver.getOne(io) catch |err| {

@@ -15,8 +15,9 @@ pub const Message = union(enum) {
     stderr: StdStream.Bytes,
     stop, // 请求停止进程
     stop_sync: *Done,
-    proc_started: i32, // 进程已启动
+    proc_started, // 进程已启动
     proc_dead, // 进程已死亡
+    proc_lost, // 进程丢失连接
 
     pub const Queue = Io.Queue(Message);
 };
