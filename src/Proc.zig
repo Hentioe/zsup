@@ -47,7 +47,7 @@ receiver: Control.Message.Queue = .init(&.{}),
 pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Error!Self {
     errdefer {
         var tmp = argv; // 复制一份，用于释放（内部的数据指针不变）。
-        tmp.deinit();
+        tmp.deinit(allocator);
     }
     const ref = Ref.new();
     const child = try std.process.spawn(io, .{
@@ -73,7 +73,7 @@ pub fn deinit(self: *Self) void {
     // todo: 输出取消后的结果
     std.log.debug("Deinitializing: {f}", .{self.ref});
     if (self.linked) |*f| f.cancel(self.io);
-    self.argv.deinit();
+    self.argv.deinit(self.allocator);
     self.* = undefined;
 }
 
