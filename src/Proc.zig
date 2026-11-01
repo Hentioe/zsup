@@ -8,7 +8,6 @@ const Control = @import("Control.zig");
 const Future = std.Io.Future;
 const Monitor = @import("Monitor.zig");
 const Reporter = @import("Reporter.zig");
-const Error = @import("errors.zig").Error;
 const Self = @This();
 
 pub const Ref = struct {

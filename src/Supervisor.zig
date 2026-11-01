@@ -6,7 +6,6 @@ const Proc = @import("Proc.zig");
 const Done = @import("Done.zig");
 const Control = @import("Control.zig");
 const errors = @import("errors.zig");
-const Error = errors.Error;
 const Self = @This();
 
 const Managed = struct {
