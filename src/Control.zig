@@ -2,7 +2,8 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Proc = @import("Proc.zig");
-const Done = @import("Done.zig");
+const replies = @import("replies.zig");
+const Done = replies.Done;
 const errors = @import("errors.zig");
 const Self = @This();
 
@@ -37,7 +38,7 @@ pub const Message = union(enum) {
     stdout: *StdStream.Bytes,
     stderr: *StdStream.Bytes,
     stop, // 请求停止进程
-    stop_sync: *Done,
+    stop_sync: *Done(errors.StopError),
     proc_started, // 进程已启动
     proc_dead, // 进程已死亡
     proc_lost, // 进程丢失连接
@@ -45,8 +46,8 @@ pub const Message = union(enum) {
     pub const Queue = Io.Queue(Message);
 };
 
-pub const Command = enum {
-    stop_proc,
+pub const Command = union(enum) {
+    stop_proc: struct { ref: Proc.Ref, done: ?*Done(errors.StopError) },
     wait_all,
 };
 

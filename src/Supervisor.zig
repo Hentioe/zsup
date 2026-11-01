@@ -3,8 +3,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Argv = @import("Argv.zig");
 const Proc = @import("Proc.zig");
-const Done = @import("Done.zig");
 const Control = @import("Control.zig");
+const replies = @import("replies.zig");
 const errors = @import("errors.zig");
 const Self = @This();
 
@@ -24,11 +24,6 @@ const Managed = struct {
         self.proc.deinit();
         allocator.destroy(self.proc);
         self.* = undefined;
-    }
-
-    pub fn stop(self: *Managed, io: Io) errors.SendError!void {
-        if (!self.proc.stopping.load(.monotonic)) return self.send(io, .stop) // 仅在进程未执行过时发送停止消息
-        else std.log.warn("Proc is already stopping: {f}", .{self.proc.ref});
     }
 
     pub fn send(self: *Managed, io: Io, message: Control.Message) errors.SendError!void {
@@ -135,6 +130,25 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
 
 pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
     switch (mail.command) {
+        .stop_proc => |payload| {
+            var err: ?errors.StopError = null;
+            if (self.procs.getPtr(payload.ref.pk)) |managed| {
+                const message: Control.Message = if (payload.done) |done| .{ .stop_sync = done } else .stop;
+                managed.send(self.io, message) catch |e| {
+                    err = e;
+                };
+            } else {
+                err = errors.StopError.ProcNotFound;
+            }
+
+            if (payload.done) |done| {
+                // 此处的错误返回，建立在 reply 侧没有收到消息的基础上。否则会导致提前返回。
+                // 目前，错误要么是 Proc 未找到，要么是发送失败，满足条件。
+                if (err) |e| done.replyErr(self.io, e) else done.reply(self.io);
+            } else {
+                if (err) |e| std.log.warn("Failed to stop proc: {s}", .{@errorName(e)});
+            }
+        },
         .wait_all => {
             if (self.procs.count() > 0) { // 如果还有进程在运行，标记为等待中，所有进程回收后会自动退出
                 self.waiting = true;
@@ -142,10 +156,13 @@ pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
                 return .exit;
             }
         },
-        else => {},
     }
 
     return .normal;
+}
+
+pub fn sendCommand(self: *Self, command: Control.Command) errors.SendError!void {
+    try self.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = command } });
 }
 
 pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) errors.LaunchError!Proc.Ref {
@@ -164,38 +181,34 @@ pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) errors.Launc
     return proc.ref;
 }
 
-pub fn stopProc(self: *Self, ref: Proc.Ref) errors.StopError!void {
-    if (self.procs.getPtr(ref.pk)) |managed| {
-        try managed.stop(self.io);
-        return;
-    }
-
-    return errors.StopError.ProcNotFound;
+pub fn stopProc(self: *Self, ref: Proc.Ref) errors.SendError!void {
+    return self.sendCommand(.{ .stop_proc = .{ .ref = ref, .done = null } });
 }
 
 pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.StopSyncError!void {
-    if (self.procs.getPtr(ref.pk)) |managed| {
-        std.log.debug("Sync stopping: {f}", .{ref});
-        var done: *Done = try .create(self.gpa);
-        defer done.release(self.gpa);
-        done.retain(); // 即将共享给 reply 侧，持有 +1
-        managed.send(self.io, .{ .stop_sync = done }) catch |err| {
-            done.release(self.gpa); // 发送失败，撤销 done 引用
-            return err;
-        };
-        // 等待进程回应或超时
-        done.event.waitTimeout(self.io, .{ .duration = .{ .clock = .awake, .raw = timeout } }) catch |err| {
-            if (done.state.cmpxchgStrong(.pending, .timeout, .acq_rel, .acquire) == null) {
-                return err; // 直接返回超时错误（reply 不会再调用）
-            } else {
-                try done.event.wait(self.io); // 进程已经回应，继续等待
-            }
-        };
+    std.log.debug("Sync stopping: {f}", .{ref});
+    var done: *replies.Done(errors.StopError) = try .create(self.gpa);
+    defer done.release(self.gpa);
+    done.retain(); // 即将发送出去，持有 +1
+    self.sendCommand(.{ .stop_proc = .{ .ref = ref, .done = done } }) catch {
+        done.release(self.gpa); // 发送失败，撤销
+    };
+    // 等待进程回应或超时
+    done.event.waitTimeout(self.io, .{ .duration = .{ .clock = .awake, .raw = timeout } }) catch |err| {
+        if (done.state.cmpxchgStrong(.pending, .timeout, .acq_rel, .acquire) == null) {
+            return err; // 直接返回超时错误（reply 不会再调用）
+        } else {
+            try done.event.wait(self.io); // 进程已经回应，继续等待
+        }
+    };
 
-        return;
+    // 检查 done 中的错误
+    if (done.err) |err| { // 虽然发送到了 Supervisor，但没有传递到 reply 侧
+        if (err == errors.StopError.Closed or err == errors.StopError.ProcNotFound) done.release(self.gpa); // 撤销持有，因为 reply 侧没有收到消息
+        return err;
     }
 
-    return errors.StopSyncError.ProcNotFound;
+    return;
 }
 
 pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
@@ -226,7 +239,7 @@ pub fn shutdown(self: *Self) void {
     var iter = self.procs.valueIterator();
     while (iter.next()) |managed| { // 向所有进程发送停止命令
         std.log.debug("Stopping managed proc: {f}", .{managed.proc.ref});
-        managed.stop(self.io) catch continue;
+        managed.send(self.io, .stop) catch continue;
     }
     self.waitAll() catch |err| std.log.err("Error waiting for all procs: {s}", .{@errorName(err)});
 }

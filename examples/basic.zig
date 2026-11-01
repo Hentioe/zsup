@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const ping = try sup.launchOwned(ping_argv, .{});
     try init.io.sleep(.fromSeconds(3), .awake);
     try sup.stopProc(ping);
-    std.log.info("Stopped ping: {f}", .{ping});
+    std.log.info("Stopped ping", .{});
 
     // 启动一个会崩溃的程序
     const crash_argv = try Argv.init(init.gpa, "zig-out/bin/crash");
