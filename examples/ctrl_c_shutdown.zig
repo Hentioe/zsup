@@ -1,6 +1,7 @@
 const std = @import("std");
 const zsup = @import("zsup");
 const posix = std.posix;
+const Argv = zsup.Argv;
 
 var should_exit = false;
 
@@ -8,7 +9,9 @@ pub fn main(init: std.process.Init) !void {
     var sup = zsup.init(init.io, init.gpa);
     defer sup.deinit();
     sup.start();
-    _ = try sup.launch(&.{ "ping", "-t", "99", "0.0.0.0" }, .{});
+    var ping_argv = try Argv.init(init.gpa, "ping");
+    try ping_argv.addArgs(init.gpa, &.{ "-t", "99", "0.0.0.0" });
+    _ = try sup.launchOwned(ping_argv, .{});
     // 配置 Sigaction 结构体
     const action: posix.Sigaction = .{
         .handler = .{ .handler = handleSignal },
