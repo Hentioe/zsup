@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const Proc = @import("Proc.zig");
 const Done = @import("Done.zig");
+const errors = @import("errors.zig");
 const Self = @This();
 
 pub const StdStream = struct {
@@ -43,7 +44,6 @@ pub const Mail = union(enum) {
 
 queue: *Mail.Queue,
 
-// todo: 返回错误
-pub fn send(self: *Self, io: Io, proc_ref: Proc.Ref, message: Message) void {
-    self.queue.putOne(io, .{ .proc = .{ .ref = proc_ref, .message = message } }) catch unreachable;
+pub fn send(self: *Self, io: Io, proc_ref: Proc.Ref, message: Message) errors.SendError!void {
+    try self.queue.putOneUncancelable(io, .{ .proc = .{ .ref = proc_ref, .message = message } });
 }

@@ -1,16 +1,9 @@
 const std = @import("std");
+const Proc = @import("Proc.zig");
 
-pub const CustomError = error{
-    ProcNotFound,
-};
-
-pub const SendError = error{ Canceled, Closed };
-
-pub const Error =
-    CustomError ||
-    SendError ||
-    std.mem.Allocator.Error ||
-    std.process.SpawnError ||
-    std.process.Child.WaitError ||
-    std.Io.Event.WaitTimeoutError // Event.waitTimeout
-;
+pub const SendError = std.Io.QueueClosedError;
+pub const ProcGetError = error{ProcNotFound};
+pub const LaunchError = Proc.InitError || std.mem.Allocator.Error;
+pub const StopError = ProcGetError || SendError;
+pub const StopSyncError = StopError || std.mem.Allocator.Error || std.Io.Event.WaitTimeoutError;
+pub const RestartError = StopSyncError || LaunchError;

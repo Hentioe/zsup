@@ -10,9 +10,10 @@ control: *Control,
 
 pub fn launch(self: *Self, io: Io, child: *Child) void {
     std.log.debug("Launching monitor for {f}", .{self.proc_ref});
-    // 是否异常死亡
-    var need_report: bool = false;
-    defer if (need_report) self.control.send(io, self.proc_ref, .proc_dead);
+    var need_report: bool = false; // 是否异常死亡
+    defer if (need_report) {
+        self.control.send(io, self.proc_ref, .proc_dead) catch |err| std.log.err("Monitor failed to send proc_dead message: {}", .{err});
+    };
     const term = child.wait(io) catch |err| {
         if (err != error.Canceled) std.log.err("Error waiting for child process: {}", .{err});
         return;

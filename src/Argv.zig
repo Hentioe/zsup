@@ -2,11 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
-pub const Error = Allocator.Error;
-
 data: std.ArrayListUnmanaged([]const u8),
 
-pub fn init(allocator: Allocator, program: []const u8) Error!Self {
+pub fn init(allocator: Allocator, program: []const u8) Allocator.Error!Self {
     var self: Self = .{
         .data = try .initCapacity(allocator, 1),
     };
@@ -15,7 +13,7 @@ pub fn init(allocator: Allocator, program: []const u8) Error!Self {
 }
 
 /// 从另一个 `Argv` 实例，克隆一个副本。
-pub fn cloneFrom(allocator: Allocator, other: *const Self) Error!Self {
+pub fn cloneFrom(allocator: Allocator, other: *const Self) Allocator.Error!Self {
     var self: Self = .{
         .data = try .initCapacity(allocator, other.data.items.len),
     };
@@ -27,11 +25,11 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
     self.data.deinit(allocator);
 }
 
-pub fn addArg(self: *Self, allocator: Allocator, arg: []const u8) Error!void {
+pub fn addArg(self: *Self, allocator: Allocator, arg: []const u8) Allocator.Error!void {
     try self.data.append(allocator, arg);
 }
 
-pub fn addArgs(self: *Self, allocator: Allocator, more: []const []const u8) Error!void {
+pub fn addArgs(self: *Self, allocator: Allocator, more: []const []const u8) Allocator.Error!void {
     try self.data.appendSlice(allocator, more);
 }
 

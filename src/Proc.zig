@@ -44,7 +44,9 @@ monitor: ?Monitor = null,
 reporter: ?Reporter = null,
 receiver: Control.Message.Queue = .init(&.{}),
 
-pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Error!Self {
+pub const InitError = std.process.SpawnError;
+
+pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) InitError!Self {
     errdefer {
         var tmp = argv; // 复制一份，用于释放（内部的数据指针不变）。
         tmp.deinit(allocator);
@@ -100,7 +102,7 @@ pub fn connect(self: *Self) void {
     var pgid: ?Pgid = null;
     if (builtin.os.tag != .windows) if (child.id) |pid| {
         pgid = -pid;
-        reporter.report(io, .{ .proc_started = pid });
+        reporter.report(io, .{ .proc_started = pid }) catch |err| std.log.err("Failed to report proc_started: {}", .{err});
     };
     var group: Io.Group = .init;
     // 启动监视器
@@ -119,7 +121,7 @@ pub fn connect(self: *Self) void {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop message for {f}", .{reporter.proc_ref});
                 _ = stop(io, &group, child, pgid);
-                reporter.report(io, .proc_dead); // 发送死亡通知
+                reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
                 break;
             },
             .stop_sync => |done| if (!self.stopping.load(.monotonic)) {
@@ -132,7 +134,7 @@ pub fn connect(self: *Self) void {
                     // 调用方已返回，直接销毁 done 结构体
                     done.destroy(self.allocator);
                 }
-                reporter.report(io, .proc_dead); // 发送死亡通知
+                reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
                 break;
             },
             else => {},

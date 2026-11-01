@@ -5,14 +5,15 @@ const Argv = @import("Argv.zig");
 const Proc = @import("Proc.zig");
 const Done = @import("Done.zig");
 const Control = @import("Control.zig");
-const Error = @import("errors.zig").Error;
+const errors = @import("errors.zig");
+const Error = errors.Error;
 const Self = @This();
 
 const Managed = struct {
     launch_options: LaunchOptions = .{},
     proc: *Proc,
 
-    pub fn create(allocator: Allocator, proc: Proc) Error!Managed {
+    pub fn create(allocator: Allocator, proc: Proc) Allocator.Error!Managed {
         const ptr = try allocator.create(Proc);
         ptr.* = proc;
         return Managed{
@@ -26,13 +27,13 @@ const Managed = struct {
         self.* = undefined;
     }
 
-    pub fn stop(self: *Managed, io: Io) Error!void {
+    pub fn stop(self: *Managed, io: Io) errors.SendError!void {
         if (!self.proc.stopping.load(.monotonic)) return self.send(io, .stop) // 仅在进程未执行过时发送停止消息
         else std.log.warn("Proc is already stopping: {f}", .{self.proc.ref});
     }
 
-    pub fn send(self: *Managed, io: Io, message: Control.Message) Error!void {
-        return self.proc.receiver.putOne(io, message);
+    pub fn send(self: *Managed, io: Io, message: Control.Message) errors.SendError!void {
+        return self.proc.receiver.putOneUncancelable(io, message);
     }
 };
 
@@ -75,11 +76,9 @@ pub const HandleStatus = enum { normal, exit };
 
 pub fn listen(self: *Self) void {
     while (true) {
-        const mail = self.mailbox.getOne(self.io) catch |err| {
-            switch (err) {
-                error.Canceled => break,
-                else => unreachable,
-            }
+        const mail = self.mailbox.getOneUncancelable(self.io) catch |err| {
+            std.log.err("Supervisor failed to get mail: {s}", .{@errorName(err)});
+            break;
         };
         var status: HandleStatus = .normal;
         if (std.meta.activeTag(mail) == .proc) status = self.handleProcMessage(mail.proc);
@@ -97,12 +96,12 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
     switch (mail.message) {
         .stdout => |bytes| {
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stdout_redirected) {
-                Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch unreachable;
+                Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stdout: {s}", .{@errorName(err)});
             };
         },
         .stderr => |bytes| {
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stderr_redirected) {
-                Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch unreachable;
+                Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stderr: {s}", .{@errorName(err)});
             };
         },
         .proc_started => |pid| {
@@ -146,7 +145,7 @@ pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
     return .normal;
 }
 
-pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) Error!Proc.Ref {
+pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) errors.LaunchError!Proc.Ref {
     const control: Control = .{ .queue = &self.mailbox };
     const proc = try Proc.initOwned(self.io, self.gpa, control, argv);
     var managed: Managed = try .create(self.gpa, proc);
@@ -158,16 +157,16 @@ pub fn launchOwned(self: *Self, argv: Argv, options: LaunchOptions) Error!Proc.R
     return proc.ref;
 }
 
-pub fn stopProc(self: *Self, ref: Proc.Ref) Error!void {
+pub fn stopProc(self: *Self, ref: Proc.Ref) errors.StopError!void {
     if (self.procs.getPtr(ref.pk)) |managed| {
         try managed.stop(self.io);
         return;
     }
 
-    return Error.ProcNotFound;
+    return errors.StopError.ProcNotFound;
 }
 
-pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) Error!void {
+pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.StopSyncError!void {
     if (self.procs.getPtr(ref.pk)) |managed| {
         std.log.debug("Sync stopping: {f}", .{ref});
         var done: *Done = try .create(self.gpa);
@@ -187,10 +186,10 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) Error!void
         return;
     }
 
-    return Error.ProcNotFound;
+    return errors.StopSyncError.ProcNotFound;
 }
 
-pub fn restartProc(self: *Self, ref: Proc.Ref) Error!Proc.Ref {
+pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
     if (self.procs.get(ref.pk)) |managed| {
         const argv = try Argv.cloneFrom(self.gpa, &managed.proc.argv);
         const options = managed.launch_options;
@@ -198,13 +197,13 @@ pub fn restartProc(self: *Self, ref: Proc.Ref) Error!Proc.Ref {
         return self.launchOwned(argv, options);
     }
 
-    return Error.ProcNotFound;
+    return errors.RestartError.ProcNotFound;
 }
 
-pub fn waitAll(self: *Self) Error!void {
+pub fn waitAll(self: *Self) errors.SendError!void {
     if (self.listened) |*f| {
         std.log.debug("Sending wait all command to supervisor", .{});
-        self.mailbox.putOne(self.io, .{ .user = .{ .command = .wait_all } }) catch unreachable;
+        try self.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = .wait_all } });
         f.await(self.io);
         self.listened = null; // 避免 shutdown 发消息
         self.exited = true;
