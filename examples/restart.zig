@@ -13,5 +13,5 @@ pub fn main(init: std.process.Init) !void {
     std.log.info("Restarting ping process", .{});
     const ping2 = try sup.restartProc(ping_ref);
     std.debug.assert(ping_ref.pk != ping2.pk);
-    try init.io.sleep(.fromSeconds(3), .awake);
+    try init.io.sleep(.fromSeconds(1), .awake);
 }

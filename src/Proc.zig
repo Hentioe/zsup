@@ -118,14 +118,14 @@ pub fn connect(self: *Self) void {
             .stop => if (!self.stopping.load(.monotonic)) {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop message for {f}", .{reporter.proc_ref});
-                stop(io, &group, child, pgid);
+                _ = stop(io, &group, child, pgid);
                 reporter.report(io, .proc_dead); // 发送死亡通知
                 break;
             },
             .stop_sync => |done| if (!self.stopping.load(.monotonic)) {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
-                stop(io, &group, child, pgid);
+                _ = stop(io, &group, child, pgid);
                 if (done.state.cmpxchgStrong(.pending, .done, .release, .monotonic) == null) {
                     done.reply(io); // 通知调用方
                 } else {
@@ -140,13 +140,23 @@ pub fn connect(self: *Self) void {
     }
 }
 
-fn stop(io: Io, group: *Io.Group, child: *Child, pgid: ?Pgid) void {
-    group.cancel(io);
-    child.kill(io);
-    // todo: 等待进程退出
-    if (pgid) |id| { // 发送 SIGTERM 给进程组
+const StopSignal = enum { none, term, pg_term };
+
+fn stop(io: Io, group: *Io.Group, child: *Child, pgid: ?Pgid) StopSignal {
+    var sent: StopSignal = .none; // 已发送的信号
+    if (pgid) |id| {
         std.log.debug("Sending SIGTERM to pgid {d}", .{id});
-        std.posix.kill(id, .TERM) // 负数表示 pgid
-        catch std.log.warn("Failed to send SIGTERM to pgid {d}", .{id});
+        if (std.posix.kill(id, .TERM)) { // 发送 SIGTERM 给进程组
+            sent = .pg_term;
+        } else |err| { // 负数表示 pgid
+            std.log.warn("Failed to send SIGTERM to pgid {d}: {s}", .{ id, @errorName(err) });
+        }
     }
+    if (sent == .none) { // 如果 pgid 信号未发送成功
+        child.kill(io);
+        sent = .term;
+    } // 无需手动 wait，因为 group 中的 monitor 任务在调用它
+    group.cancel(io); // 取消监视器、上报器任务
+
+    return sent;
 }
