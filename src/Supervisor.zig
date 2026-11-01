@@ -4,11 +4,15 @@ const Allocator = std.mem.Allocator;
 const Argv = @import("Argv.zig");
 const Proc = @import("Proc.zig");
 const Control = @import("Control.zig");
+const Recipe = @import("Recipe.zig");
 const replies = @import("replies.zig");
 const errors = @import("errors.zig");
 const Self = @This();
 
+const log = std.log.scoped(.supervisor);
+
 const Managed = struct {
+    // todo: 拥有 Argv（Recipe）
     launch_options: LaunchOptions = .{},
     proc: *Proc,
 
@@ -31,7 +35,7 @@ const Managed = struct {
     }
 };
 
-const LaunchOptions = struct {
+pub const LaunchOptions = struct {
     stdout_redirected: bool = true,
     stderr_redirected: bool = true,
 };
@@ -53,7 +57,7 @@ pub fn init(io: Io, gpa: Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
-    std.log.debug("Deinitializing supervisor", .{});
+    log.debug("Deinitializing supervisor", .{});
     if (!self.exited) self.shutdown();
     var iter = self.procs.valueIterator();
     while (iter.next()) |m| m.destroy(self.gpa);
@@ -71,7 +75,7 @@ pub const HandleStatus = enum { normal, exit };
 pub fn listen(self: *Self) void {
     while (true) {
         const mail = self.mailbox.getOneUncancelable(self.io) catch |err| {
-            std.log.err("Supervisor failed to get mail: {s}", .{@errorName(err)});
+            log.err("Supervisor failed to get mail: {s}", .{@errorName(err)});
             break;
         };
         var status: HandleStatus = .normal;
@@ -83,7 +87,7 @@ pub fn listen(self: *Self) void {
             .normal => {},
         }
     }
-    std.log.debug("Supervisor exited", .{});
+    log.debug("Supervisor exited", .{});
 }
 
 pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
@@ -91,31 +95,31 @@ pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
         .stdout => |bytes| {
             defer bytes.destroy(self.gpa);
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stdout_redirected) {
-                Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stdout: {s}", .{@errorName(err)});
+                Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch |err| log.err("Failed to write to stdout: {s}", .{@errorName(err)});
             };
         },
         .stderr => |bytes| {
             defer bytes.destroy(self.gpa);
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stderr_redirected) {
-                Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stderr: {s}", .{@errorName(err)});
+                Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| log.err("Failed to write to stderr: {s}", .{@errorName(err)});
             };
         },
         .proc_started => {
             if (self.procs.getPtr(mail.ref.pk)) |managed| {
-                std.log.info("Started: {f}", .{managed.proc.ref});
+                log.info("Started: {f}", .{managed.proc.ref});
             } else {
-                std.log.err("Started but not found in procs map: {f}", .{mail.ref});
+                log.err("Started but not found in procs map: {f}", .{mail.ref});
             }
         },
         .proc_dead => {
-            std.log.warn("Dead: {f}", .{mail.ref});
+            log.warn("Dead: {f}", .{mail.ref});
             if (self.procs.fetchRemove(mail.ref.pk)) |kv| {
                 var p = kv.value;
                 p.destroy(self.gpa); // 销毁
             }
             std.debug.assert(self.procs.get(mail.ref.pk) == null);
             if (self.waiting and self.procs.count() == 0) {
-                std.log.debug("All procs exited, supervisor exiting", .{});
+                log.debug("All procs exited, supervisor exiting", .{});
                 return .exit;
             }
         },
@@ -146,7 +150,18 @@ pub fn handleUserCommand(self: *Self, mail: Control.UserMail) HandleStatus {
                 // 目前，错误要么是 Proc 未找到，要么是发送失败，满足条件。
                 if (err) |e| done.replyErr(self.io, e) else done.reply(self.io);
             } else {
-                if (err) |e| std.log.warn("Failed to stop proc: {s}", .{@errorName(e)});
+                if (err) |e| log.warn("Failed to stop proc: {s}", .{@errorName(e)});
+            }
+        },
+        .get_recipe => |payload| {
+            if (self.procs.get(payload.ref.pk)) |managed| {
+                const recipe: Recipe = .{ .argv = &managed.proc.argv, .options = managed.launch_options };
+                // 不需要 CAS，默认 Supervisor 的存活周期大于客户端调用
+                payload.done.replyResult(self.io, recipe);
+                payload.done.release(self.gpa);
+                std.debug.assert(payload.done.result != null);
+            } else {
+                payload.done.replyErr(self.io, errors.ProcGetError.ProcNotFound);
             }
         },
         .wait_all => {
@@ -186,8 +201,8 @@ pub fn stopProc(self: *Self, ref: Proc.Ref) errors.SendError!void {
 }
 
 pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.StopSyncError!void {
-    std.log.debug("Sync stopping: {f}", .{ref});
-    var done: *replies.Done(errors.StopError) = try .create(self.gpa);
+    log.debug("Sync stopping: {f}", .{ref});
+    var done: *replies.Done(void, errors.StopError) = try .create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
     self.sendCommand(.{ .stop_proc = .{ .ref = ref, .done = done } }) catch {
@@ -212,34 +227,48 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.Sto
 }
 
 pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
-    if (self.procs.get(ref.pk)) |managed| {
-        const argv = try Argv.cloneFrom(self.gpa, &managed.proc.argv);
-        const options = managed.launch_options;
-        try self.stopProcSync(ref, .fromSeconds(3));
-        return self.launchOwned(argv, options);
-    }
-
-    return errors.RestartError.ProcNotFound;
+    const recipe = try self.getRecipe(ref);
+    const argv = try Argv.cloneFrom(self.gpa, recipe.argv);
+    try self.stopProcSync(ref, .fromSeconds(3));
+    return self.launchOwned(argv, recipe.options);
 }
 
+pub fn getRecipe(self: *Self, ref: Proc.Ref) errors.GetRecipeError!Recipe {
+    var done = try replies.Done(Recipe, errors.ProcGetError).create(self.gpa);
+    defer done.release(self.gpa);
+    done.retain(); // 即将发送出去，持有 +1
+    self.sendCommand(.{ .get_recipe = .{ .ref = ref, .done = done } }) catch |err| {
+        done.release(self.gpa); // 发送失败，撤销
+        return err;
+    };
+    done.event.waitUncancelable(self.io);
+    if (done.err) |err| {
+        return err;
+    }
+
+    return done.result.?;
+}
+
+// todo: 做进 listener 内部
 pub fn waitAll(self: *Self) errors.SendError!void {
     if (self.listener) |*f| {
-        std.log.debug("Sending wait all command to supervisor", .{});
-        try self.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = .wait_all } });
+        log.debug("Sending wait all command to supervisor", .{});
+        try self.sendCommand(.wait_all);
         f.await(self.io);
         self.listener = null; // 避免 shutdown 发消息
         self.exited = true;
     } else {
-        std.log.warn("Supervisor not running", .{});
+        log.warn("Supervisor not running", .{});
     }
 }
 
+// todo: 做进 listener 内部
 pub fn shutdown(self: *Self) void {
     if (self.exited) return;
     var iter = self.procs.valueIterator();
     while (iter.next()) |managed| { // 向所有进程发送停止命令
-        std.log.debug("Stopping managed proc: {f}", .{managed.proc.ref});
+        log.debug("Stopping managed proc: {f}", .{managed.proc.ref});
         managed.send(self.io, .stop) catch continue;
     }
-    self.waitAll() catch |err| std.log.err("Error waiting for all procs: {s}", .{@errorName(err)});
+    self.waitAll() catch |err| log.err("Error waiting for all procs: {s}", .{@errorName(err)});
 }

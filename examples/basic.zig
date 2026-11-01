@@ -2,6 +2,8 @@ const std = @import("std");
 const zsup = @import("zsup");
 const Argv = zsup.Argv;
 
+const log = std.log.scoped(.main);
+
 pub fn main(init: std.process.Init) !void {
     var sup = zsup.init(init.io, init.gpa);
     defer sup.deinit();
@@ -13,7 +15,7 @@ pub fn main(init: std.process.Init) !void {
     const ping = try sup.launchOwned(ping_argv, .{});
     try init.io.sleep(.fromSeconds(3), .awake);
     try sup.stopProc(ping);
-    std.log.info("Stopped ping", .{});
+    log.info("Stopped ping", .{});
 
     // 启动一个会崩溃的程序
     const crash_argv = try Argv.init(init.gpa, "zig-out/bin/crash");
@@ -22,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
         .stdout_redirected = false, // 同上
     });
 
-    std.log.info("Restarting crash: {f}", .{crash});
+    log.info("Restarting crash: {f}", .{crash});
     // 重启 crash
     _ = try sup.restartProc(crash);
 
@@ -31,8 +33,8 @@ pub fn main(init: std.process.Init) !void {
     const spawn = try sup.launchOwned(spawn_argv, .{});
     try init.io.sleep(.fromSeconds(1), .awake);
     try sup.stopProcSync(spawn, .fromSeconds(3));
-    std.log.info("All spawn ping processes stopped", .{});
+    log.info("All spawn ping processes stopped", .{});
     try init.io.sleep(.fromSeconds(1), .awake);
     try sup.waitAll();
-    std.log.info("Goodbye", .{});
+    log.info("Goodbye", .{});
 }

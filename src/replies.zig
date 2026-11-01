@@ -5,7 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const DoneState = enum(u8) { pending, done, timeout };
 
-pub fn Done(comptime E: type) type {
+pub fn Done(comptime T: type, comptime E: type) type {
     if (@typeInfo(E) != .error_set) @compileError("E must be an error set, got " ++ @typeName(E));
 
     return struct {
@@ -14,6 +14,7 @@ pub fn Done(comptime E: type) type {
         refs: atomic.Value(u32) = .init(1),
         state: atomic.Value(DoneState) = .init(.pending),
         err: ?E = null,
+        result: ?T = null,
         event: Io.Event = .unset,
 
         pub fn create(allocator: Allocator) error{OutOfMemory}!*Self {
@@ -40,6 +41,11 @@ pub fn Done(comptime E: type) type {
 
         pub fn replyErr(self: *Self, io: Io, err: E) void {
             self.err = err;
+            self.event.set(io);
+        }
+
+        pub fn replyResult(self: *Self, io: Io, result: T) void {
+            self.result = result;
             self.event.set(io);
         }
     };
