@@ -39,6 +39,7 @@ child: Child,
 stopping: std.atomic.Value(bool),
 control: Control,
 connector: ?Future(ConnectError!void) = null,
+group: Io.Group = .init,
 monitor: ?Monitor = null,
 reporter: ?Reporter = null,
 receiver: Control.Message.Queue = .init(&.{}),
@@ -74,6 +75,7 @@ pub fn deinit(self: *Self) void {
     // todo: 输出取消后的结果
     std.log.debug("Deinitializing: {f}", .{self.ref});
     if (self.connector) |*f| f.cancel(self.io) catch |err| std.log.warn("Connect cancel failed: {}", .{err});
+    self.group.cancel(self.io); // 注意：要保证 connect 没有运行（避免同时调用 group.cancel）。
     self.argv.deinit(self.allocator);
     self.* = undefined;
 }
@@ -110,13 +112,12 @@ pub fn connect(self: *Self) ConnectError!void {
         pgid = -pid;
         reporter.report(io, .proc_started) catch |err| std.log.err("Failed to report proc_started: {}", .{err});
     };
-    var group: Io.Group = .init;
-    errdefer group.cancel(self.io);
+    errdefer self.group.cancel(self.io);
     // 启动监视器
-    try group.concurrent(io, Monitor.launch, .{ monitor, io, child });
+    try self.group.concurrent(io, Monitor.launch, .{ monitor, io, child });
     // 启动上报器
-    if (child.stdout) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .out });
-    if (child.stderr) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .err });
+    if (child.stdout) |f| try self.group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .out });
+    if (child.stderr) |f| try self.group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .err });
 
     while (true) {
         const message = receiver.getOne(io) catch |err| {
@@ -127,14 +128,14 @@ pub fn connect(self: *Self) ConnectError!void {
             .stop => if (!self.stopping.load(.monotonic)) {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop message for {f}", .{reporter.proc_ref});
-                _ = stop(io, &group, child, pgid);
+                _ = stop(io, &self.group, child, pgid);
                 reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
                 break;
             },
             .stop_sync => |done| if (!self.stopping.load(.monotonic)) {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
-                _ = stop(io, &group, child, pgid);
+                _ = stop(io, &self.group, child, pgid);
                 if (done.state.cmpxchgStrong(.pending, .done, .release, .monotonic) == null) {
                     done.reply(io); // 通知调用方
                 } else {
