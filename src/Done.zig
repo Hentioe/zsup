@@ -3,8 +3,10 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
+const State = enum(u8) { pending, done, timeout };
+
 event: Io.Event = .unset,
-timeout: std.atomic.Value(bool) = .init(false), // 是否超时
+state: std.atomic.Value(State) = .init(.pending),
 
 pub fn create(allocator: Allocator) error{OutOfMemory}!*Self {
     const ptr = try allocator.create(Self);

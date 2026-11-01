@@ -126,10 +126,11 @@ pub fn connect(self: *Self) void {
                 self.stopping.store(true, .monotonic);
                 std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
                 stop(io, &group, child, pgid);
-                if (done.timeout.load(.monotonic)) { // 发送侧已超时返回
-                    done.destroy(self.allocator);
-                } else {
+                if (done.state.cmpxchgStrong(.pending, .done, .release, .monotonic) == null) {
                     done.reply(io); // 通知调用方
+                } else {
+                    // 调用方已返回，直接销毁 done 结构体
+                    done.destroy(self.allocator);
                 }
                 reporter.report(io, .proc_dead); // 发送死亡通知
                 break;
