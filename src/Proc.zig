@@ -98,6 +98,7 @@ pub fn connect(self: *Self) ConnectError!void {
     errdefer self.control.send(self.io, self.ref, .proc_lost) catch |err| std.log.err("Failed to send lost message: {}", .{err});
 
     const io = self.io;
+    const allocator = self.allocator;
     const child = &self.child;
     const reporter = &self.reporter.?;
     const monitor = &self.monitor.?;
@@ -114,8 +115,8 @@ pub fn connect(self: *Self) ConnectError!void {
     // 启动监视器
     try group.concurrent(io, Monitor.launch, .{ monitor, io, child });
     // 启动上报器
-    if (child.stdout) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, f, .out });
-    if (child.stderr) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, f, .err });
+    if (child.stdout) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .out });
+    if (child.stderr) |f| try group.concurrent(io, Reporter.launch, .{ reporter, io, allocator, f, .err });
 
     while (true) {
         const message = receiver.getOne(io) catch |err| {

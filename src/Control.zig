@@ -1,5 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
+const Allocator = std.mem.Allocator;
 const Proc = @import("Proc.zig");
 const Done = @import("Done.zig");
 const errors = @import("errors.zig");
@@ -7,12 +8,34 @@ const Self = @This();
 
 pub const StdStream = struct {
     pub const Type = enum { out, err };
-    pub const Bytes = struct { st: Type, data: []const u8 };
+    pub const Bytes = struct {
+        st: Type,
+        data: []u8,
+
+        pub fn create(allocator: Allocator, st: Type, data: []const u8) Allocator.Error!*Bytes {
+            const owned = try allocator.alloc(u8, data.len);
+            @memcpy(owned, data);
+            errdefer allocator.free(owned);
+            const ptr = try allocator.create(Bytes);
+
+            ptr.* = .{
+                .st = st,
+                .data = owned,
+            };
+
+            return ptr;
+        }
+
+        pub fn destroy(self: *Bytes, allocator: Allocator) void {
+            allocator.free(self.data);
+            allocator.destroy(self);
+        }
+    };
 };
 
 pub const Message = union(enum) {
-    stdout: StdStream.Bytes,
-    stderr: StdStream.Bytes,
+    stdout: *StdStream.Bytes,
+    stderr: *StdStream.Bytes,
     stop, // 请求停止进程
     stop_sync: *Done,
     proc_started, // 进程已启动

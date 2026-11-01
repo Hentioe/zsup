@@ -94,11 +94,13 @@ pub fn listen(self: *Self) void {
 pub fn handleProcMessage(self: *Self, mail: Control.ProcMail) HandleStatus {
     switch (mail.message) {
         .stdout => |bytes| {
+            defer bytes.destroy(self.gpa);
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stdout_redirected) {
                 Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stdout: {s}", .{@errorName(err)});
             };
         },
         .stderr => |bytes| {
+            defer bytes.destroy(self.gpa);
             if (self.procs.getPtr(mail.ref.pk)) |m| if (m.launch_options.stderr_redirected) {
                 Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| std.log.err("Failed to write to stderr: {s}", .{@errorName(err)});
             };
