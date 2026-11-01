@@ -132,18 +132,20 @@ pub fn connect(self: *Self) ConnectError!void {
                 reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
                 break;
             },
-            .stop_sync => |done| if (!self.stopping.load(.monotonic)) {
-                self.stopping.store(true, .monotonic);
-                std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
-                _ = stop(io, &self.group, child, pgid);
-                if (done.state.cmpxchgStrong(.pending, .done, .release, .monotonic) == null) {
-                    done.reply(io); // 通知调用方
+            .stop_sync => |done| {
+                if (!self.stopping.load(.monotonic)) {
+                    self.stopping.store(true, .monotonic);
+                    std.log.debug("Received stop_sync message for {f}", .{reporter.proc_ref});
+                    _ = stop(io, &self.group, child, pgid);
+                    if (done.state.cmpxchgStrong(.pending, .done, .release, .monotonic) == null) {
+                        done.reply(io); // 通知调用方
+                    }
+                    done.release(allocator); // 释放
+                    reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
+                    break;
                 } else {
-                    // 调用方已返回，直接销毁 done 结构体
-                    done.destroy(self.allocator);
+                    done.release(allocator); // 释放
                 }
-                reporter.report(io, .proc_dead) catch |err| std.log.err("Failed to report proc_dead: {}", .{err}); // 发送死亡通知
-                break;
             },
             else => {},
         }

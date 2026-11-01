@@ -177,16 +177,18 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.Sto
     if (self.procs.getPtr(ref.pk)) |managed| {
         std.log.debug("Sync stopping: {f}", .{ref});
         var done: *Done = try .create(self.gpa);
-        defer if (done.state.load(.monotonic) != .timeout) done.destroy(self.gpa); // 没有超时，释放 done
-        try managed.send(self.io, .{ .stop_sync = done });
-        // 等待进程停止或超时
+        defer done.release(self.gpa);
+        done.retain(); // 即将共享给 reply 侧，持有 +1
+        managed.send(self.io, .{ .stop_sync = done }) catch |err| {
+            done.release(self.gpa); // 发送失败，撤销 done 引用
+            return err;
+        };
+        // 等待进程回应或超时
         done.event.waitTimeout(self.io, .{ .duration = .{ .clock = .awake, .raw = timeout } }) catch |err| {
             if (done.state.cmpxchgStrong(.pending, .timeout, .acq_rel, .acquire) == null) {
-                // 确定进程不会回应，直接返回超时错误
-                return err;
+                return err; // 直接返回超时错误（reply 不会再调用）
             } else {
-                // 进程已经回应，继续等待
-                try done.event.wait(self.io);
+                try done.event.wait(self.io); // 进程已经回应，继续等待
             }
         };
 
