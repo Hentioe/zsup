@@ -56,7 +56,7 @@ pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Ini
     const ref = Ref.new();
     const child = try std.process.spawn(io, .{
         .argv = argv.data.items,
-        .stdin = .pipe,
+        .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
         .pgid = 0,
