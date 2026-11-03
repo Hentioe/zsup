@@ -11,8 +11,11 @@ const Self = @This();
 options: Recipe.Options = .{},
 proc: *Proc,
 
-// todo: 改为 init
 pub fn init(allocator: Allocator, proc: Proc) Allocator.Error!Self {
+    errdefer {
+        var tmp = proc;
+        tmp.deinit();
+    }
     const proc_ptr = try allocator.create(Proc);
     proc_ptr.* = proc;
     return .{

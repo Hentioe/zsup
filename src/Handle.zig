@@ -30,9 +30,9 @@ pub fn sendCommand(self: *Self, command: Control.Command) SendError!void {
 
 pub fn launchOwned(self: *Self, argv: Argv, options: Recipe.Options) LaunchError!Proc.Ref {
     const control: Control = .{ .queue = &self.sup.mailbox };
-    var proc = try Proc.initOwned(self.io, self.gpa, control, argv);
-    errdefer proc.deinit();
+    const proc = try Proc.initOwned(self.io, self.gpa, control, argv);
     var managed: Managed = try .init(self.gpa, proc);
+    errdefer managed.deinit(self.gpa); // proc 的释放交给 managed
     managed.options = options;
     const done = try replies.Done(void, LaunchError).create(self.gpa);
     defer done.release(self.gpa);

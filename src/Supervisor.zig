@@ -142,15 +142,15 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
 fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleReturn {
     switch (mail.command) {
         .proc_created => |payload| {
+            payload.managed.proc.link() catch {
+                // todo: 链接失败，可能需要上报 proc_lost 或采取其他处理措施。至少要满足：
+                // - 从 procs 移除
+                // - 终止任务、进程
+                // - 释放 Proc
+                payload.done.replyErr(self.io, errors.LaunchError.LinkFailed);
+                return .normal;
+            };
             if (procs.put(payload.managed.proc.ref.pk, payload.managed)) {
-                payload.managed.proc.link() catch {
-                    // todo: 链接失败，可能需要上报 proc_lost 或采取其他处理措施。至少要满足：
-                    // - 从 procs 移除
-                    // - 终止任务、进程
-                    // - 释放 Proc
-                    payload.done.replyErr(self.io, errors.LaunchError.LinkFailed);
-                    return .normal;
-                };
                 payload.done.reply(self.io);
             } else |err| {
                 payload.done.replyErr(self.io, err);
@@ -172,7 +172,7 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
             if (payload.done) |done| {
                 // 此处的错误返回，建立在 reply 侧没有收到消息的基础上。否则会导致提前返回。
                 // 目前，错误要么是 Proc 未找到，要么是发送失败，满足条件。
-                if (err) |e| done.replyErr(self.io, e) else done.reply(self.io);
+                if (err) |e| done.replyErr(self.io, e);
             } else {
                 if (err) |e| log.warn("Failed to stop proc: {s}", .{@errorName(e)});
             }
@@ -181,6 +181,7 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
             if (procs.get(payload.ref.pk)) |managed| {
                 const recipe: Recipe = .{ .argv = &managed.proc.argv, .options = managed.options };
                 // 不需要 CAS，默认 Supervisor 的存活周期大于客户端调用
+                // todo: 在此处克隆一份 recipe
                 payload.done.replyResult(self.io, recipe);
                 payload.done.release(self.gpa);
                 std.debug.assert(payload.done.result != null);
