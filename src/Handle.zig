@@ -28,12 +28,15 @@ pub fn sendCommand(self: *Self, command: Control.Command) SendError!void {
     try self.sup.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = command } });
 }
 
-pub fn launchOwned(self: *Self, argv: Argv, options: Recipe.Options) LaunchError!Proc.Ref {
+pub fn launch(self: *Self, argv: *const Argv, options: Recipe.Options) LaunchError!Proc.Ref {
+    const cloned_argv = try Argv.clone(self.gpa, argv);
+    var recipe = Recipe.init(cloned_argv, options);
+    defer recipe.deinit(self.gpa); // cloned_argv 的释放交给 recipe
     const control: Control = .{ .queue = &self.sup.mailbox };
-    const proc = try Proc.initOwned(self.io, self.gpa, control, argv);
-    var managed: Managed = try .init(self.gpa, proc);
+    const proc = try Proc.init(self.io, self.gpa, control, recipe.argv.data.items);
+    // 注意：proc 初始化到 managed 接管之间，不要有错误返回（否则会导致 proc 泄漏）。
+    var managed = try Managed.init(self.gpa, &recipe, proc);
     errdefer managed.deinit(self.gpa); // proc 的释放交给 managed
-    managed.options = options;
     const done = try replies.Done(void, LaunchError).create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
@@ -80,17 +83,17 @@ pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.Sto
 }
 
 pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
-    const recipe = try self.getProcRecipe(ref);
-    const argv = try Argv.cloneFrom(self.gpa, recipe.argv);
+    var recipe = try self.getProcRecipeOwned(ref);
+    defer recipe.deinit(self.gpa);
     try self.stopProcSync(ref, .fromSeconds(3));
-    return self.launchOwned(argv, recipe.options);
+    return self.launch(&recipe.argv, recipe.options);
 }
 
-/// 获取指定进程的启动“配方”，包含：
-///  - Argv（借用）
+/// 获取指定进程的启动“配方”，调用者需自己释放。包含：
+///  - Argv
 ///  - LaunchOptions
-pub fn getProcRecipe(self: *Self, ref: Proc.Ref) errors.GetRecipeError!Recipe {
-    var done = try replies.Done(Recipe, errors.GetProcError).create(self.gpa);
+pub fn getProcRecipeOwned(self: *Self, ref: Proc.Ref) errors.GetRecipeError!Recipe {
+    var done = try replies.Done(Recipe, errors.GetRecipeError).create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
     self.sendCommand(.{ .get_recipe = .{ .ref = ref, .done = done } }) catch |err| {

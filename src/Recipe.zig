@@ -1,9 +1,32 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Argv = @import("Argv.zig");
+const Self = @This();
 
 pub const Options = struct {
     stdout_redirected: bool = true,
     stderr_redirected: bool = true,
 };
 
-argv: *const Argv,
+argv: Argv,
 options: Options,
+
+pub fn init(argv: Argv, options: Options) Self {
+    return .{
+        .argv = argv,
+        .options = options,
+    };
+}
+
+pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
+    const argv = try Argv.clone(allocator, &self.argv);
+    return .{
+        .argv = argv,
+        .options = self.options,
+    };
+}
+
+pub fn deinit(self: *Self, allocator: Allocator) void {
+    self.argv.deinit(allocator);
+    self.* = undefined;
+}

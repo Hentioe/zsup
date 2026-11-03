@@ -7,26 +7,38 @@ const Control = @import("Control.zig");
 const errors = @import("errors.zig");
 const Self = @This();
 
-// todo: 拥有 Argv
-options: Recipe.Options = .{},
+recipe: Recipe,
 proc: *Proc,
 
-pub fn init(allocator: Allocator, proc: Proc) Allocator.Error!Self {
+/// 初始化 Managed 实例。此函数会接管 `proc` 的释放，而 `recipe` 仍由外部管理，内部深克隆后由 Managed 拥有自己的副本。
+pub fn init(allocator: Allocator, recipe: *const Recipe, proc: Proc) Allocator.Error!Self {
     errdefer {
-        var tmp = proc;
-        tmp.deinit();
+        var p = proc;
+        p.deinit();
     }
-    const proc_ptr = try allocator.create(Proc);
-    proc_ptr.* = proc;
+    const owned_proc = try allocator.create(Proc);
+    errdefer allocator.destroy(owned_proc);
+    owned_proc.* = proc;
+    const owned_recipe = try recipe.clone(allocator);
     return .{
-        .proc = proc_ptr,
+        .recipe = owned_recipe,
+        .proc = owned_proc,
     };
 }
 
 pub fn deinit(self: *Self, allocator: Allocator) void {
     self.proc.deinit();
     allocator.destroy(self.proc);
+    self.recipe.deinit(allocator);
     self.* = undefined;
+}
+
+pub fn isStdoutRedirected(self: *const Self) bool {
+    return self.recipe.options.stdout_redirected;
+}
+
+pub fn isStderrRedirected(self: *const Self) bool {
+    return self.recipe.options.stderr_redirected;
 }
 
 pub fn send(self: *Self, io: Io, message: Control.Message) errors.SendError!void {

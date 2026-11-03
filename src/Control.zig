@@ -52,7 +52,7 @@ pub const Message = union(enum) {
 pub const Command = union(enum) {
     proc_created: struct { managed: Managed, done: *Done(void, errors.LaunchError) },
     stop_proc: struct { ref: Proc.Ref, done: ?*Done(void, errors.StopError) },
-    get_recipe: struct { ref: Proc.Ref, done: *Done(Recipe, errors.GetProcError) },
+    get_recipe: struct { ref: Proc.Ref, done: *Done(Recipe, errors.GetRecipeError) },
     shutdown,
 };
 

@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
-const Argv = @import("Argv.zig");
 const Control = @import("Control.zig");
 const Future = std.Io.Future;
 const Monitor = @import("Monitor.zig");
@@ -36,7 +35,6 @@ pub const Ref = struct {
 io: Io,
 allocator: Allocator,
 ref: Ref,
-argv: Argv,
 child: Child,
 stopping: std.atomic.Value(bool),
 control: Control,
@@ -48,13 +46,9 @@ receiver: Control.Message.Queue = .init(&.{}),
 
 pub const InitError = std.process.SpawnError;
 
-pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) InitError!Self {
-    errdefer {
-        var tmp = argv; // 复制一份，用于释放（内部的数据指针不变）。
-        tmp.deinit(allocator);
-    }
+pub fn init(io: Io, allocator: Allocator, control: Control, argv: []const []const u8) InitError!Self {
     const child = try std.process.spawn(io, .{
-        .argv = argv.data.items,
+        .argv = argv,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
@@ -65,7 +59,6 @@ pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Ini
     return .{
         .ref = ref,
         .child = child,
-        .argv = argv,
         .io = io,
         .stopping = .init(false),
         .allocator = allocator,
@@ -81,7 +74,6 @@ pub fn deinit(self: *Self) void {
     }
     if (self.monitor) |*m| m.deinit(self.io); // 确保监视器关闭
     self.reporters.cancel(self.io); // 注意：要保证 connect 没有运行（避免同时调用 group.cancel）。
-    self.argv.deinit(self.allocator);
     log.debug("Deinitialized: {f}", .{self.ref});
     self.* = undefined;
 }

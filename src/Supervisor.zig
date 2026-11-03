@@ -3,7 +3,6 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Managed = @import("Managed.zig");
 const Control = @import("Control.zig");
-const Recipe = @import("Recipe.zig");
 const Handle = @import("Handle.zig");
 const Procs = std.AutoHashMap(u32, Managed);
 const errors = @import("errors.zig");
@@ -102,13 +101,13 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
     switch (mail.message) {
         .stdout => |bytes| {
             defer bytes.destroy(self.gpa);
-            if (procs.getPtr(mail.ref.pk)) |m| if (m.options.stdout_redirected) {
+            if (procs.getPtr(mail.ref.pk)) |m| if (m.isStdoutRedirected()) {
                 Io.File.stdout().writeStreamingAll(self.io, bytes.data) catch |err| log.err("Failed to write to stdout: {s}", .{@errorName(err)});
             };
         },
         .stderr => |bytes| {
             defer bytes.destroy(self.gpa);
-            if (procs.getPtr(mail.ref.pk)) |m| if (m.options.stderr_redirected) {
+            if (procs.getPtr(mail.ref.pk)) |m| if (m.isStderrRedirected()) {
                 Io.File.stderr().writeStreamingAll(self.io, bytes.data) catch |err| log.err("Failed to write to stderr: {s}", .{@errorName(err)});
             };
         },
@@ -149,6 +148,8 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
                 // - 终止任务、进程
                 // - 释放 Proc
                 payload.done.replyErr(self.io, errors.LaunchError.LinkFailed);
+                std.debug.assert(payload.done.err != null);
+                payload.done.release(self.gpa);
                 return .normal;
             };
             if (procs.put(payload.managed.proc.ref.pk, payload.managed)) {
@@ -179,15 +180,19 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
             }
         },
         .get_recipe => |payload| {
-            if (procs.get(payload.ref.pk)) |managed| {
-                const recipe: Recipe = .{ .argv = &managed.proc.argv, .options = managed.options };
+            if (procs.get(payload.ref.pk)) |*managed| {
+                const recipe = managed.recipe.clone(self.gpa) catch |err| {
+                    payload.done.replyErr(self.io, err);
+                    payload.done.release(self.gpa);
+                    return .normal;
+                };
                 // 不需要 CAS，默认 Supervisor 的存活周期大于客户端调用
-                // todo: 在此处克隆一份 recipe
                 payload.done.replyResult(self.io, recipe);
-                payload.done.release(self.gpa);
                 std.debug.assert(payload.done.result != null);
+                payload.done.release(self.gpa);
             } else {
                 payload.done.replyErr(self.io, errors.GetProcError.ProcNotFound);
+                payload.done.release(self.gpa);
             }
         },
         .shutdown => {

@@ -12,15 +12,17 @@ pub fn main(init: std.process.Init) !void {
 
     // 启动一个 ping 程序，3 秒后停止
     var ping_argv = try Argv.init(init.gpa, "ping");
+    defer ping_argv.deinit(init.gpa);
     try ping_argv.addArgs(init.gpa, &.{ "-t", "99", "0.0.0.0" });
-    const ping = try handle.launchOwned(ping_argv, .{});
+    const ping = try handle.launch(&ping_argv, .{});
     try init.io.sleep(.fromSeconds(3), .awake);
     try handle.stopProc(ping);
     log.info("Stopped ping", .{});
 
     // 启动一个会崩溃的程序
-    const crash_argv = try Argv.init(init.gpa, "zig-out/bin/crash");
-    const crash = try handle.launchOwned(crash_argv, .{
+    var crash_argv = try Argv.init(init.gpa, "zig-out/bin/crash");
+    defer crash_argv.deinit(init.gpa);
+    const crash = try handle.launch(&crash_argv, .{
         .stderr_redirected = false, // 避免崩溃消息引起误解
         .stdout_redirected = false, // 同上
     });
@@ -30,8 +32,9 @@ pub fn main(init: std.process.Init) !void {
     _ = try handle.restartProc(crash);
 
     // 启动一个会生成子进程的程序
-    const spawn_argv = try Argv.init(init.gpa, "zig-out/bin/spawn");
-    const spawn = try handle.launchOwned(spawn_argv, .{});
+    var spawn_argv = try Argv.init(init.gpa, "zig-out/bin/spawn");
+    defer spawn_argv.deinit(init.gpa);
+    const spawn = try handle.launch(&spawn_argv, .{});
     try init.io.sleep(.fromSeconds(1), .awake);
     try handle.stopProcSync(spawn, .fromSeconds(3));
     log.info("All spawn ping processes stopped", .{});
