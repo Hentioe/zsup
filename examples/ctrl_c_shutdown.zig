@@ -10,9 +10,13 @@ pub fn main(init: std.process.Init) !void {
     defer sup.destroy();
     try sup.start();
     var handle = sup.handle();
-    const ping_argv = try Argv.init(init.gpa, "steam");
-    // try ping_argv.addArgs(init.gpa, &.{ "-t", "99", "0.0.0.0" });
-    _ = try handle.launchOwned(ping_argv, .{});
+
+    // 启动一个持续运行的 ping 程序
+    var ping_argv = try Argv.init(init.gpa, "ping");
+    defer ping_argv.deinit(init.gpa);
+    try ping_argv.addArgs(init.gpa, &.{ "-t", "99", "0.0.0.0" });
+    _ = try handle.launch(&ping_argv, .{});
+
     // 配置 Sigaction 结构体
     const action: posix.Sigaction = .{
         .handler = .{ .handler = handleSignal },
