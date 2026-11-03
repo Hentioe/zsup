@@ -43,6 +43,7 @@ pub const Message = union(enum) {
     stop_sync: *Done(void, errors.StopError),
     proc_started, // 进程已启动
     proc_dead, // 进程已死亡
+    proc_dead_abnormal, // 进程异常死亡
     proc_lost, // 进程丢失连接
 
     pub const Queue = Io.Queue(Message);
