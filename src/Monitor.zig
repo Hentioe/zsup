@@ -5,39 +5,64 @@ const Control = @import("Control.zig");
 const Proc = @import("Proc.zig");
 const Self = @This();
 
+const log = std.log.scoped(.monitor);
+
+pub const KillSource = enum { self, connector, unknown };
+
 proc_ref: Proc.Ref,
 control: *Control,
+child: *Child,
+future: ?Io.Future(void) = null,
+kill_source: KillSource = .unknown,
 
-pub fn launch(self: *Self, io: Io, child: *Child) void {
-    std.log.debug("Launching monitor for {f}", .{self.proc_ref});
-    var need_report: bool = false; // 是否异常死亡
-    defer if (need_report) {
-        self.control.send(io, self.proc_ref, .proc_dead) catch |err| std.log.err("Monitor failed to send proc_dead message: {}", .{err});
+pub fn init(proc_ref: Proc.Ref, child: *Child, control: *Control) Self {
+    return Self{ .proc_ref = proc_ref, .child = child, .control = control };
+}
+
+pub fn deinit(self: *Self, io: Io) void {
+    if (self.future) |*f| f.cancel(io);
+}
+
+pub fn start(self: *Self, io: Io) Io.ConcurrentError!void {
+    std.debug.assert(self.future == null);
+    self.future = try io.concurrent(launch, .{ self, io });
+}
+
+pub fn kill(self: *Self, io: Io) void {
+    self.kill_source = .self;
+    self.child.kill(io);
+}
+
+pub fn wait(self: *Self, io: Io) void {
+    if (self.future) |*f| f.await(io);
+}
+
+fn launch(self: *Self, io: Io) void {
+    log.debug("Launching monitor for {f}", .{self.proc_ref});
+    defer if (self.kill_source == .unknown) { // 未知的击杀源，主动上报死亡
+        log.warn("Child process died unexpectedly, reporting to supervisor", .{});
+        self.control.send(io, self.proc_ref, .proc_dead_abnormal) catch |err| log.err("Monitor failed to send message: {}", .{err});
     };
-    const term = child.wait(io) catch |err| {
-        if (err != error.Canceled) std.log.err("Error waiting for child process: {}", .{err});
+    const term = self.child.wait(io) catch |err| {
+        if (err != error.Canceled) log.err("Error waiting for child process: {}", .{err});
         return;
     };
     switch (term) {
         .exited => |status| {
-            std.log.warn("Child process exited with status: {}", .{status});
-            need_report = true; // 即使是 0，通过信号发送的也需要主动上报死亡
+            log.warn("Child process exited with status: {}", .{status});
         },
         .signal => |sig| {
             // .TERM    ->  进程被终止（默认）
             // .ABRT    ->  进程崩溃
             // .KILL    ->  进程被强制终止
             // .INT     ->  进程被中断（通常是 Ctrl+C，被 .exited 分支捕获）
-            std.log.warn("Child process terminated by signal: {}", .{sig});
-            need_report = true;
+            log.warn("Child process terminated by signal: {}", .{sig});
         },
         .stopped => |sig| {
-            std.log.warn("Child process stopped by signal: {}", .{sig});
-            need_report = true;
+            log.warn("Child process stopped by signal: {}", .{sig});
         },
         .unknown => |code| {
-            std.log.warn("Child process terminated with unknown status code: {}", .{code});
-            need_report = true;
+            log.warn("Child process terminated with unknown status code: {}", .{code});
         },
     }
 }

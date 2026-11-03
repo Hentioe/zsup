@@ -118,11 +118,11 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
                 log.err("Started but not found in procs map: {f}", .{mail.ref});
             }
         },
-        .proc_dead => {
+        .proc_dead, .proc_dead_abnormal => {
             log.warn("Dead: {f}", .{mail.ref});
             if (procs.fetchRemove(mail.ref.pk)) |kv| {
-                var p = kv.value;
-                p.deinit(self.gpa); // 销毁
+                var m = kv.value;
+                m.deinit(self.gpa); // 销毁
             }
             std.debug.assert(procs.get(mail.ref.pk) == null);
             if (self.state.load(.monotonic) == .closing and procs.count() == 0) {
