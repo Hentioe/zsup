@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const Managed = @import("Managed.zig");
 const Control = @import("Control.zig");
 const Handle = @import("Handle.zig");
+const Proc = @import("Proc.zig");
 const Procs = std.AutoHashMap(u32, Managed);
 const errors = @import("errors.zig");
 const StartError = errors.StartError;
@@ -121,8 +122,8 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
         .proc_dead, .proc_dead_abnormal => {
             log.warn("Dead: {f}", .{mail.ref});
             if (procs.fetchRemove(mail.ref.pk)) |kv| {
-                var m = kv.value;
-                m.deinit(self.gpa); // 销毁
+                var managed = kv.value;
+                managed.deinit(self.gpa); // 销毁受管数据
             }
             std.debug.assert(procs.get(mail.ref.pk) == null);
             if (self.state.load(.monotonic) == .closing and procs.count() == 0) {
@@ -141,23 +142,36 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
 
 fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleReturn {
     switch (mail.command) {
-        .proc_created => |payload| {
-            payload.managed.proc.link() catch {
-                // todo: 链接失败，可能需要上报 proc_lost 或采取其他处理措施。至少要满足：
-                // - 从 procs 移除
-                // - 终止任务、进程
-                // - 释放 Proc
-                payload.done.replyErr(self.io, errors.LaunchError.LinkFailed);
-                std.debug.assert(payload.done.err != null);
+        .start_proc => |payload| {
+            if (self.state.load(.monotonic) != .working) { // Handle 在发送消息时已有一重判断，这里是第二重保险。避免窗口期间 Supervisor 关闭
+                payload.done.replyErr(self.io, errors.LaunchError.NotWorking);
+                payload.done.release(self.gpa);
+                return .normal;
+            }
+            const control: Control = .{ .queue = &self.mailbox };
+            const argv = payload.recipe.argv.data.items;
+            var proc = Proc.create(self.io, self.gpa, control, argv) catch |err| {
+                payload.done.replyErr(self.io, err);
                 payload.done.release(self.gpa);
                 return .normal;
             };
-            if (procs.put(payload.managed.proc.ref.pk, payload.managed)) {
-                payload.done.reply(self.io);
+            proc.link() catch {
+                proc.destroy(); // 释放 proc，需确保：任务已终止，资源已清理
+                payload.done.replyErr(self.io, errors.LaunchError.LinkFailed);
+                payload.done.release(self.gpa);
+                return .normal;
+            };
+            var managed = Managed.init(self.gpa, &payload.recipe, proc) catch |err| {
+                payload.done.replyErr(self.io, err);
+                payload.done.release(self.gpa);
+                return .normal;
+            };
+            if (procs.put(proc.ref.pk, managed)) { // 添加进 procs 表
+                payload.done.replyResult(self.io, proc.ref);
             } else |err| {
+                managed.deinit(self.gpa); // 释放 managed（包含 proc）
                 payload.done.replyErr(self.io, err);
             }
-
             payload.done.release(self.gpa);
         },
         .stop_proc => |payload| {
@@ -195,6 +209,7 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
                 payload.done.release(self.gpa);
             }
         },
+        // todo: 把 shutdown 单独列为管理命令（不需要 proc_ref）
         .shutdown => {
             if (procs.count() == 0) return .exit;
 

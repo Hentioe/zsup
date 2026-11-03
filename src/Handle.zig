@@ -5,9 +5,8 @@ const Supervisor = @import("Supervisor.zig");
 const Argv = @import("Argv.zig");
 const Proc = @import("Proc.zig");
 const Recipe = @import("Recipe.zig");
-const Managed = @import("Managed.zig");
 const Control = @import("Control.zig");
-const replies = @import("replies.zig");
+const Done = @import("replies.zig").Done;
 const errors = @import("errors.zig");
 const SendError = errors.SendError;
 const LaunchError = errors.LaunchError;
@@ -29,18 +28,12 @@ pub fn sendCommand(self: *Self, command: Control.Command) SendError!void {
 }
 
 pub fn launch(self: *Self, argv: *const Argv, options: Recipe.Options) LaunchError!Proc.Ref {
-    const cloned_argv = try Argv.clone(self.gpa, argv);
-    var recipe = Recipe.init(cloned_argv, options);
-    defer recipe.deinit(self.gpa); // cloned_argv 的释放交给 recipe
-    const control: Control = .{ .queue = &self.sup.mailbox };
-    const proc = try Proc.init(self.io, self.gpa, control, recipe.argv.data.items);
-    // 注意：proc 初始化到 managed 接管之间，不要有错误返回（否则会导致 proc 泄漏）。
-    var managed = try Managed.init(self.gpa, &recipe, proc);
-    errdefer managed.deinit(self.gpa); // proc 的释放交给 managed
-    const done = try replies.Done(void, LaunchError).create(self.gpa);
+    var recipe = try Recipe.init(self.gpa, argv, options);
+    defer recipe.deinit(self.gpa);
+    const done = try Done(Proc.Ref, LaunchError).create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
-    self.sendCommand(.{ .proc_created = .{ .managed = managed, .done = done } }) catch |err| {
+    self.sendCommand(.{ .start_proc = .{ .recipe = recipe, .done = done } }) catch |err| {
         done.release(self.gpa); // 发送失败，撤销
         return err;
     };
@@ -49,7 +42,7 @@ pub fn launch(self: *Self, argv: *const Argv, options: Recipe.Options) LaunchErr
         return err;
     }
 
-    return proc.ref;
+    return done.result orelse unreachable;
 }
 
 pub fn stopProc(self: *Self, ref: Proc.Ref) SendError!void {
@@ -58,7 +51,7 @@ pub fn stopProc(self: *Self, ref: Proc.Ref) SendError!void {
 
 pub fn stopProcSync(self: *Self, ref: Proc.Ref, timeout: Io.Duration) errors.StopSyncError!void {
     log.debug("Sync stopping: {f}", .{ref});
-    var done: *replies.Done(void, errors.StopError) = try .create(self.gpa);
+    var done: *Done(void, errors.StopError) = try .create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
     self.sendCommand(.{ .stop_proc = .{ .ref = ref, .done = done } }) catch {
@@ -93,7 +86,7 @@ pub fn restartProc(self: *Self, ref: Proc.Ref) errors.RestartError!Proc.Ref {
 ///  - Argv
 ///  - LaunchOptions
 pub fn getProcRecipeOwned(self: *Self, ref: Proc.Ref) errors.GetRecipeError!Recipe {
-    var done = try replies.Done(Recipe, errors.GetRecipeError).create(self.gpa);
+    var done = try Done(Recipe, errors.GetRecipeError).create(self.gpa);
     defer done.release(self.gpa);
     done.retain(); // 即将发送出去，持有 +1
     self.sendCommand(.{ .get_recipe = .{ .ref = ref, .done = done } }) catch |err| {

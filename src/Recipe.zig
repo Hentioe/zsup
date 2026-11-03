@@ -11,9 +11,10 @@ pub const Options = struct {
 argv: Argv,
 options: Options,
 
-pub fn init(argv: Argv, options: Options) Self {
+pub fn init(allocator: Allocator, argv: *const Argv, options: Options) Allocator.Error!Self {
+    const owned_argv = try Argv.clone(allocator, argv);
     return .{
-        .argv = argv,
+        .argv = owned_argv,
         .options = options,
     };
 }

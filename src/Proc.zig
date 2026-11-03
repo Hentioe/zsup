@@ -46,7 +46,9 @@ receiver: Control.Message.Queue = .init(&.{}),
 
 pub const InitError = std.process.SpawnError;
 
-pub fn init(io: Io, allocator: Allocator, control: Control, argv: []const []const u8) InitError!Self {
+pub fn create(io: Io, allocator: Allocator, control: Control, argv: []const []const u8) InitError!*Self {
+    const ptr = try allocator.create(Self);
+    errdefer allocator.destroy(ptr);
     const child = try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .ignore,
@@ -55,8 +57,7 @@ pub fn init(io: Io, allocator: Allocator, control: Control, argv: []const []cons
         .pgid = 0,
     });
     const ref = Ref.new(child.id);
-
-    return .{
+    ptr.* = .{
         .ref = ref,
         .child = child,
         .io = io,
@@ -64,17 +65,23 @@ pub fn init(io: Io, allocator: Allocator, control: Control, argv: []const []cons
         .allocator = allocator,
         .control = control,
     };
+
+    return ptr;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn destroy(self: *Self) void {
     // todo: 输出取消后的结果
-    log.debug("Deinitializing: {f}", .{self.ref});
+    log.debug("Destroying: {f}", .{self.ref});
     if (self.connector) |*f| {
         f.cancel(self.io) catch |err| log.warn("Connect cancel failed: {}", .{err});
     }
-    if (self.monitor) |*m| m.deinit(self.io); // 确保监视器关闭
+    if (self.monitor) |*monitor| {
+        monitor.kill(self.io); // 先尝试杀掉子进程
+        monitor.wait(self.io); // 等待监视器完成
+        monitor.deinit(self.io); // 确保监视器销毁
+    }
     self.reporters.cancel(self.io); // 注意：要保证 connect 没有运行（避免同时调用 group.cancel）。
-    log.debug("Deinitialized: {f}", .{self.ref});
+    log.debug("Destroyed: {f}", .{self.ref});
     self.* = undefined;
 }
 
@@ -91,7 +98,7 @@ pub fn link(self: *Self) Io.ConcurrentError!void {
 const Pgid = std.posix.pid_t;
 const ConnectError = std.Io.ConcurrentError;
 
-pub fn connect(self: *Self) ConnectError!void {
+fn connect(self: *Self) ConnectError!void {
     // 正常情况，进入 receiver 消息处理后，不应该返回错误。
     // 如果返回了错误，表示在前置阶段就失败了。进程可能进入“失控”状态。上报为 proc_lost（丢失连接）
     errdefer self.control.send(self.io, self.ref, .proc_lost) catch |err| log.err("Failed to send lost message: {}", .{err});

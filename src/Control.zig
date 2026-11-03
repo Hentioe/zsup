@@ -5,7 +5,6 @@ const Proc = @import("Proc.zig");
 const replies = @import("replies.zig");
 const Done = replies.Done;
 const Recipe = @import("Recipe.zig");
-const Managed = @import("Managed.zig");
 const errors = @import("errors.zig");
 const Self = @This();
 
@@ -50,7 +49,7 @@ pub const Message = union(enum) {
 };
 
 pub const Command = union(enum) {
-    proc_created: struct { managed: Managed, done: *Done(void, errors.LaunchError) },
+    start_proc: struct { recipe: Recipe, done: *Done(Proc.Ref, errors.LaunchError) },
     stop_proc: struct { ref: Proc.Ref, done: ?*Done(void, errors.StopError) },
     get_recipe: struct { ref: Proc.Ref, done: *Done(Recipe, errors.GetRecipeError) },
     shutdown,

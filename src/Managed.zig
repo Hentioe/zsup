@@ -11,23 +11,17 @@ recipe: Recipe,
 proc: *Proc,
 
 /// 初始化 Managed 实例。此函数会接管 `proc` 的释放，而 `recipe` 仍由外部管理，内部深克隆后由 Managed 拥有自己的副本。
-pub fn init(allocator: Allocator, recipe: *const Recipe, proc: Proc) Allocator.Error!Self {
-    errdefer {
-        var p = proc;
-        p.deinit();
-    }
-    const owned_proc = try allocator.create(Proc);
-    errdefer allocator.destroy(owned_proc);
-    owned_proc.* = proc;
+pub fn init(allocator: Allocator, recipe: *const Recipe, proc: *Proc) Allocator.Error!Self {
+    errdefer proc.destroy();
     const owned_recipe = try recipe.clone(allocator);
     return .{
         .recipe = owned_recipe,
-        .proc = owned_proc,
+        .proc = proc,
     };
 }
 
 pub fn deinit(self: *Self, allocator: Allocator) void {
-    self.proc.deinit();
+    self.proc.destroy();
     allocator.destroy(self.proc);
     self.recipe.deinit(allocator);
     self.* = undefined;
