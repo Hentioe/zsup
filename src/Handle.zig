@@ -19,11 +19,13 @@ gpa: Allocator,
 sup: *Supervisor,
 
 pub fn sendCommand(self: *Self, command: Control.Command) SendError!void {
-    switch (self.sup.state.load(.monotonic)) {
+    while (self.sup.state.cmpxchgStrong(.working, .receiving, .acq_rel, .acquire)) |current| switch (current) {
         .starting => return SendError.Busy,
         .closing, .not_started => return SendError.NotWorking,
-        .working => {},
-    }
+        .receiving => continue,
+        .working => unreachable,
+    };
+    defer self.sup.state.store(.working, .monotonic);
     try self.sup.mailbox.putOneUncancelable(self.io, .{ .user = .{ .command = command } });
 }
 

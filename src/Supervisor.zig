@@ -12,7 +12,7 @@ const Self = @This();
 
 const log = std.log.scoped(.supervisor);
 
-pub const State = enum(u8) { not_started, starting, working, closing };
+pub const State = enum(u8) { not_started, starting, working, receiving, closing };
 
 io: Io,
 gpa: Allocator,
@@ -27,10 +27,11 @@ pub fn create(io: Io, gpa: Allocator) Allocator.Error!*Self {
 }
 
 pub fn destroy(self: *Self) void {
-    log.debug("Deinitializing supervisor", .{});
+    log.debug("Supervisor destroying", .{});
     if (self.state.load(.monotonic) != .not_started) self.shutdown();
     self.mailbox.close(self.io);
     self.gpa.destroy(self);
+    log.debug("Supervisor destroyed", .{});
 }
 
 /// 启动 Supervisor，启动后可处理 `Handle` 的任意调用。若不是 `not_started` 状态，会返回错误。
@@ -38,7 +39,7 @@ pub fn start(self: *Self) StartError!void {
     if (self.state.cmpxchgStrong(.not_started, .starting, .acq_rel, .acquire)) |current| {
         switch (current) {
             .starting, .closing => return StartError.Busy,
-            .working => return StartError.AlreadyStarted,
+            .working, .receiving => return StartError.AlreadyStarted,
             .not_started => unreachable,
         }
         return;
@@ -55,7 +56,7 @@ pub fn shutdown(self: *Self) void {
     while (self.state.cmpxchgStrong(.working, .closing, .acq_rel, .acquire)) |current| {
         switch (current) {
             .not_started => return,
-            .starting, .closing => continue,
+            .starting, .closing, .receiving => continue,
             .working => unreachable,
         }
     }
@@ -143,11 +144,6 @@ fn handleProcMessage(self: *Self, procs: *Procs, mail: Control.ProcMail) HandleR
 fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleReturn {
     switch (mail.command) {
         .start_proc => |payload| {
-            if (self.state.load(.monotonic) != .working) { // Handle 在发送消息时已有一重判断，这里是第二重保险。避免窗口期间 Supervisor 关闭
-                payload.done.replyErr(self.io, errors.LaunchError.NotWorking);
-                payload.done.release(self.gpa);
-                return .normal;
-            }
             const control: Control = .{ .queue = &self.mailbox };
             const argv = payload.recipe.argv.data.items;
             var proc = Proc.create(self.io, self.gpa, control, argv) catch |err| {
