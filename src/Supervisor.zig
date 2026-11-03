@@ -29,6 +29,7 @@ pub fn create(io: Io, gpa: Allocator) Allocator.Error!*Self {
 pub fn destroy(self: *Self) void {
     log.debug("Deinitializing supervisor", .{});
     if (self.state.load(.monotonic) != .not_started) self.shutdown();
+    self.mailbox.close(self.io);
     self.gpa.destroy(self);
 }
 
