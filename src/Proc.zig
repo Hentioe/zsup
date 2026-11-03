@@ -17,11 +17,11 @@ pub const Ref = struct {
     pub var counter: Value = .init(0);
 
     pk: u32,
-    pid: ?Child.Id = null,
+    pid: ?Child.Id,
 
-    pub fn new() Ref {
+    pub fn new(pid: ?Child.Id) Ref {
         const pk = counter.fetchAdd(1, .monotonic);
-        return .{ .pk = pk };
+        return .{ .pk = pk, .pid = pid };
     }
 
     pub fn format(self: *const Ref, writer: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -53,7 +53,6 @@ pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Ini
         var tmp = argv; // 复制一份，用于释放（内部的数据指针不变）。
         tmp.deinit(allocator);
     }
-    const ref = Ref.new();
     const child = try std.process.spawn(io, .{
         .argv = argv.data.items,
         .stdin = .ignore,
@@ -61,6 +60,7 @@ pub fn initOwned(io: Io, allocator: Allocator, control: Control, argv: Argv) Ini
         .stderr = .pipe,
         .pgid = 0,
     });
+    const ref = Ref.new(child.id);
 
     return .{
         .ref = ref,
@@ -113,7 +113,6 @@ pub fn connect(self: *Self) ConnectError!void {
 
     var pgid: ?Pgid = null;
     if (builtin.os.tag != .windows) if (child.id) |pid| {
-        self.ref.pid = pid;
         pgid = -pid;
         reporter.report(io, .proc_started) catch |err| log.err("Failed to report proc_started: {}", .{err});
     };
