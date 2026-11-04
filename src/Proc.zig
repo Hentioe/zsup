@@ -9,7 +9,7 @@ const Monitor = @import("Monitor.zig");
 const Reporter = @import("Reporter.zig");
 const Self = @This();
 
-const log = std.log.scoped(.proc);
+const log = std.log.scoped(.zsup_proc);
 
 pub const Ref = struct {
     pub const Value = std.atomic.Value(u32);

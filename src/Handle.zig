@@ -12,7 +12,7 @@ const SendError = errors.SendError;
 const LaunchError = errors.LaunchError;
 const Self = @This();
 
-const log = std.log.scoped(.handle);
+const log = std.log.scoped(.zsup_handle);
 
 io: Io,
 gpa: Allocator,

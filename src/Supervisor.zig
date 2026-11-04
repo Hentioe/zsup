@@ -10,7 +10,7 @@ const errors = @import("errors.zig");
 const StartError = errors.StartError;
 const Self = @This();
 
-const log = std.log.scoped(.supervisor);
+const log = std.log.scoped(.zsup);
 
 pub const State = enum(u8) { not_started, starting, working, receiving, closing };
 

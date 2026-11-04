@@ -5,7 +5,7 @@ const Control = @import("Control.zig");
 const Proc = @import("Proc.zig");
 const Self = @This();
 
-const log = std.log.scoped(.monitor);
+const log = std.log.scoped(.zsup_proc_monitor);
 
 pub const KillSource = enum { self, connector, unknown };
 
