@@ -4,6 +4,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 const Control = @import("Control.zig");
+const Recipe = @import("Recipe.zig");
 const Future = std.Io.Future;
 const Monitor = @import("Monitor.zig");
 const Reporter = @import("Reporter.zig");
@@ -46,14 +47,16 @@ receiver: Control.Message.Queue = .init(&.{}),
 
 pub const InitError = std.process.SpawnError;
 
-pub fn create(io: Io, allocator: Allocator, control: Control, argv: []const []const u8) InitError!*Self {
+pub fn create(io: Io, allocator: Allocator, control: Control, recipe: *const Recipe) InitError!*Self {
     const ptr = try allocator.create(Self);
     errdefer allocator.destroy(ptr);
+    const cwd = recipe.options.cwd.toChildCwd();
     const child = try std.process.spawn(io, .{
-        .argv = argv,
+        .argv = recipe.argv.data.items,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
+        .cwd = cwd,
         .pgid = 0,
     });
     const ref = Ref.new(child.id);

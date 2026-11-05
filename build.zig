@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
         "spawn",
         "restart",
         "ctrl_c_shutdown",
+        "oneshot",
     };
     for (examples) |name| {
         const exe = b.addExecutable(.{

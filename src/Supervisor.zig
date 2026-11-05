@@ -145,8 +145,7 @@ fn handleUserCommand(self: *Self, procs: *Procs, mail: Control.UserMail) HandleR
     switch (mail.command) {
         .start_proc => |payload| {
             const control: Control = .{ .queue = &self.mailbox };
-            const argv = payload.recipe.argv.data.items;
-            var proc = Proc.create(self.io, self.gpa, control, argv) catch |err| {
+            var proc = Proc.create(self.io, self.gpa, control, &payload.recipe) catch |err| {
                 payload.done.replyErr(self.io, err);
                 payload.done.release(self.gpa);
                 return .normal;
